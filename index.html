@@ -861,17 +861,52 @@ function _syncFirebaseAuth(email, password, onDone){
 
 // ── Auth ──
 function doLogin(){
-  const e=document.getElementById('lEmail').value.trim().toLowerCase();
-  const p=document.getElementById('lPwd').value;
-  const btn=document.getElementById('lBtn');
-  if(!e||!p){showErr('Please enter your email and password.');return;}
-  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';
+  const emailField = document.getElementById('lEmail');
+  const pwdField = document.getElementById('lPwd');
+  const btn = document.getElementById('lBtn');
+  const errBox = document.getElementById('lErr');
 
-  // Always reset button state — called whether login succeeds or fails
-  const resetBtn=()=>{
-    btn.disabled=false;
-    btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';
+  const e = emailField ? emailField.value.trim().toLowerCase() : '';
+  const p = pwdField ? pwdField.value : '';
+
+  console.log("🔵 Login Attempt - Email:", e);
+
+  if(!e || !p){
+    showErr('Please enter email and password');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in...';
+
+  const resetBtn = () => {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';
   };
+
+  // Find user locally
+  const u = AD.users.find(user => user.email.toLowerCase() === e && user.password === p);
+
+  if(!u){
+    console.error("❌ User not found in local data");
+    resetBtn();
+    showErr('Invalid email or password');
+    return;
+  }
+
+  console.log("🟢 User found locally:", u.name, u.role);
+
+  if(u.status === 'fired' || !u.active){
+    resetBtn();
+    showErr('Account is inactive or terminated');
+    return;
+  }
+
+  // Login Success
+  console.log("✅ Login successful - Proceeding to dashboard");
+  resetBtn();
+  loginSuccess(u);
+}
 
   const attempt=()=>{
     const u=AD.users.find(u=>u.email.toLowerCase()===e&&u.password===p);
