@@ -1920,62 +1920,47 @@ function addEmployee(){
     if(!access.includes(cb.value)) access.push(cb.value);
   });
   if(!access.length) access = [...(ROLE_ACCESS[role] || ['dashboard','bookings'])];
-  if(!access.includes('dashboard') && !access.includes('all')) access.unshift('dashboard');
 
   const newUser = {
     id: 'u_' + Date.now(),
-    email,
-    password: pwd,
-    role,
-    designation,
-    name,
-    active: true,
-    joinDate: document.getElementById('eJoin').value || today(),
-    salary,
-    phone,
-    cnic,
-    status: 'active',
-    access
+    email, password: pwd, role, designation, name,
+    active: true, joinDate: document.getElementById('eJoin').value || today(),
+    salary, phone, cnic, status: 'active', access
   };
 
-  // ====================== LOCAL SAVE ======================
+  console.log("🟡 Attempting to add employee:", newUser);
+
+  // Local Save
   AD.users.push(newUser);
   save();
+  console.log("✅ Saved locally");
 
-  // ====================== FIREBASE SYNC (Improved) ======================
+  // Firebase Save with full debug
   if (window.firebaseReady && window.FB) {
     const userRef = window.FB.ref(window.FB.db, `users/${newUser.id}`);
-    
-    window.FB.set(userRef, newUser)   // Changed from update() to set()
+    console.log("🔄 Trying to write to Firebase path: users/" + newUser.id);
+
+    window.FB.set(userRef, newUser)
       .then(() => {
-        console.log('✅ Employee successfully synced to Firebase');
+        console.log("✅ SUCCESS: Employee written to Firebase");
+        window._toastMsg(`${name} added successfully!`, 'success');
       })
       .catch(err => {
-        console.error('❌ Firebase write failed:', err);
-        window._toastMsg('Saved locally. Cloud sync failed.', 'warn');
+        console.error("❌ Firebase Error:", err.code, err.message);
+        window._toastMsg('Failed to save to cloud: ' + err.message, 'error');
       });
+  } else {
+    console.warn("⚠️ Firebase not ready");
+    window._toastMsg(`${name} added locally only`, 'warn');
   }
 
-  // Register in Firebase Auth (for login)
-  if(window.FB?.auth){
-    window.FB.createUserWithEmailAndPassword(window.FB.auth, email, pwd)
-      .catch(e => {
-        if(e.code !== 'auth/email-already-in-use'){
-          console.warn('[AgriSpray] Auth pre-register failed:', e.code);
-        }
-      });
-  }
-
-  window._toastMsg(`${name} added successfully!`,'success');
   renderEmployees();
 
-  // Clear form fields
+  // Clear form
   ['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.value = '';
+    const el = document.getElementById(id); if(el) el.value = '';
   });
-}
-  window._toastMsg(`${name} added`,'success');renderEmployees();['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+}  window._toastMsg(`${name} added`,'success');renderEmployees();['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
 }
 function editSalary(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;const ns=prompt(`New salary for ${u.name}:`,u.salary||0);if(ns===null)return;const p=parseFloat(ns);if(isNaN(p)||p<0){window._toastMsg('Invalid','error');return;}u.salary=p;save();renderEmployees();window._toastMsg(`Salary: ${fc(p)}`,'success');}
 function setEmpStatus(uid,st){const u=AD.users.find(u=>u.id===uid);if(u){u.status=st;u.active=st==='active';save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:st,active:st==='active'}).catch(()=>{});renderEmployees();window._toastMsg(`${u.name} → ${st}`,'success');}}
