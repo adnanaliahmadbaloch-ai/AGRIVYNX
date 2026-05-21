@@ -1,3 +1,6 @@
+bash
+
+cat > /mnt/user-data/outputs/agrispray-pro.html << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,6 +20,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getDatabase, ref, set, onValue, update, get, serverTimestamp, push, remove, runTransaction, off, onDisconnect }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
 const cfg = {
   apiKey:"AIzaSyDCXPRlN5CVmfZgpO7_NE2hRCqCr0h5mqY",
   authDomain:"agrispray-pro.firebaseapp.com",
@@ -28,9 +34,15 @@ const cfg = {
 };
 const app = initializeApp(cfg);
 const db  = getDatabase(app);
+const auth = getAuth(app);
 let _fbListenersRegistered = false;
-window.FB = { db, ref, set, onValue, update, get, serverTimestamp, push, remove, runTransaction, off };
+
+window.FB = {
+  db, auth, ref, set, onValue, update, get, serverTimestamp, push, remove,
+  runTransaction, off, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut
+};
 window.firebaseReady = true;
+
 onValue(ref(db, '.info/connected'), snap => {
   window.isOnline = snap.val() === true;
   const b = document.getElementById('syncBadge');
@@ -46,21 +58,21 @@ onValue(ref(db, '.info/connected'), snap => {
     b.className = 'sync-badge offline';
   }
 });
+
 window._updatePresence = function() {
   if (!window.CU || !window.firebaseReady || !window.FB) return;
   const u = window.CU;
-  // FIX: Do not update presence for fired/inactive users
   if (u.status === 'fired' || u.status === 'inactive' || !u.active) return;
   const presRef = window.FB.ref(window.FB.db, `presence/${u.id}`);
   window.FB.update(presRef, { id:u.id, name:u.name, role:u.role, designation:u.designation||u.role, online:true, lastSeen:Date.now(), status:'active' }).catch(()=>{});
   onDisconnect(presRef).update({ online:false, lastSeen:Date.now() }).catch(()=>{});
 };
+
 window._listenPresence = function() {
   if (!window.FB) return;
   onValue(window.FB.ref(window.FB.db,'presence'), snap => {
     window._presenceData = snap.val() || {};
     if (window._page === 'team') window._renderTeamOnline && window._renderTeamOnline();
-    // FIX: Only count online users who are active (not fired/deleted)
     const activeUserIds = (window.AD?.users || [])
       .filter(u => u.status === 'active' && u.active)
       .map(u => u.id);
@@ -70,11 +82,11 @@ window._listenPresence = function() {
     if (tc) tc.innerText = onlineCount > 0 ? `${onlineCount} online` : 'Team';
   });
 };
+
 window._fbListen = function() {
   if (_fbListenersRegistered) return;
   _fbListenersRegistered = true;
 
-  // ── Bookings listener ──
   onValue(ref(db,'bookings'), snap => {
     if (!window.AD) return;
     const data = snap.val(); if (!data) return;
@@ -82,12 +94,10 @@ window._fbListen = function() {
     let changed = false;
     Object.values(data).forEach(fb => {
       if (!fb || !fb.id) return;
-      // FIX: Always respect the deleted list — never re-add deleted bookings
       if (deleted.includes(fb.id)) return;
       const i = window.AD.bookings.findIndex(b => b.id === fb.id);
       if (i === -1) {
         window.AD.bookings.push(fb); changed = true;
-        // FIX: Notify ALL pilots of new bookings (not just assigned pilot)
         if (window.CU?.role === 'pilot')
           window._showNotif(`New booking available: ${fb.id} — ${fb.farmer} (${fb.acres} ac)`, 'info');
         if (window.CU?.role === 'manager')
@@ -109,7 +119,6 @@ window._fbListen = function() {
         window.AD.bookings[i] = fb;
       }
     });
-    // FIX: After sync, re-apply deletedBKIds filter to ensure deleted bookings are purged
     if (window.AD.deletedBKIds && window.AD.deletedBKIds.length)
       window.AD.bookings = window.AD.bookings.filter(b => !window.AD.deletedBKIds.includes(b.id));
     if (changed) {
@@ -119,7 +128,6 @@ window._fbListen = function() {
     }
   });
 
-  // ── Invoices listener ──
   onValue(ref(db,'invoices'), snap => {
     if (!window.AD) return;
     const data = snap.val(); if (!data) return;
@@ -150,20 +158,16 @@ window._fbListen = function() {
     }
   });
 
-  // ── Users listener ──
   onValue(ref(db,'users'), snap => {
     const data = snap.val(); if (!data || !window.AD) return;
     Object.values(data).forEach(fu => {
-      // FIX: If this user is in our deletedDefaults or is fired, do not re-add them
       if (!fu || !fu.id) return;
       const isDeleted = (window.AD.deletedDefaults || []).includes(fu.id);
       if (isDeleted) return;
       const i = window.AD.users.findIndex(u => u.id === fu.id);
       if (i === -1) {
-        // Only add if not fired (could be fired on another session)
         if (fu.status !== 'fired') window.AD.users.push(fu);
       } else {
-        // Sync all fields but never un-fire a fired employee
         const localUser = window.AD.users[i];
         if (localUser.status === 'fired' || fu.status === 'fired') {
           window.AD.users[i] = { ...localUser, ...fu, status: 'fired', active: false };
@@ -218,22 +222,10 @@ window._fbListen = function() {
 }
 html{height:100%;scroll-behavior:smooth;}
 body{font-family:var(--ff-body);background:var(--bg);color:var(--t1);min-height:100vh;overflow-x:hidden;}
-
-/* LOGIN SCREEN */
-.login-screen{
-  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:9999;
-  background:#030a04;overflow:hidden;
-}
-.login-bg{
-  position:absolute;inset:0;
-  background:linear-gradient(180deg, #030a04 0%, #061209 40%, #041008 70%, #030a04 100%);
-}
+.login-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:9999;background:#030a04;overflow:hidden;}
+.login-bg{position:absolute;inset:0;background:linear-gradient(180deg, #030a04 0%, #061209 40%, #041008 70%, #030a04 100%);}
 .crop-field{position:absolute;bottom:0;left:0;right:0;height:55%;overflow:hidden;}
-.crop-row{
-  position:absolute;bottom:0;width:100%;height:6px;
-  background:linear-gradient(90deg, transparent 0%, rgba(13,107,53,0.4) 20%, rgba(13,122,56,0.6) 50%, rgba(13,107,53,0.4) 80%, transparent 100%);
-  border-radius:2px;animation:crop-sway 3s ease-in-out infinite;
-}
+.crop-row{position:absolute;bottom:0;width:100%;height:6px;background:linear-gradient(90deg, transparent 0%, rgba(13,107,53,0.4) 20%, rgba(13,122,56,0.6) 50%, rgba(13,107,53,0.4) 80%, transparent 100%);border-radius:2px;animation:crop-sway 3s ease-in-out infinite;}
 .crop-row:nth-child(1){bottom:8%;animation-delay:0s;opacity:0.9;}
 .crop-row:nth-child(2){bottom:16%;animation-delay:0.3s;opacity:0.75;}
 .crop-row:nth-child(3){bottom:24%;animation-delay:0.6s;opacity:0.6;}
@@ -245,31 +237,14 @@ body{font-family:var(--ff-body);background:var(--bg);color:var(--t1);min-height:
 .stars{position:absolute;inset:0;}
 .star{position:absolute;border-radius:50%;background:#fff;animation:twinkle var(--d,3s) ease-in-out infinite;}
 @keyframes twinkle{0%,100%{opacity:var(--o1,0.1);transform:scale(1);}50%{opacity:var(--o2,0.6);transform:scale(1.3);}}
-.horizon-glow{
-  position:absolute;bottom:44%;left:0;right:0;height:80px;
-  background:linear-gradient(180deg, transparent 0%, rgba(13,107,53,0.12) 50%, rgba(13,107,53,0.25) 100%);
-  filter:blur(20px);
-}
-.moon{
-  position:absolute;top:8%;right:12%;width:40px;height:40px;border-radius:50%;
-  background:radial-gradient(circle at 35% 35%, #e8e8d0, #c4c4a0);
-  box-shadow:0 0 30px rgba(232,232,192,0.2);animation:moon-float 8s ease-in-out infinite;
-}
+.horizon-glow{position:absolute;bottom:44%;left:0;right:0;height:80px;background:linear-gradient(180deg, transparent 0%, rgba(13,107,53,0.12) 50%, rgba(13,107,53,0.25) 100%);filter:blur(20px);}
+.moon{position:absolute;top:8%;right:12%;width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 35% 35%, #e8e8d0, #c4c4a0);box-shadow:0 0 30px rgba(232,232,192,0.2);animation:moon-float 8s ease-in-out infinite;}
 @keyframes moon-float{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
 .drone-scene{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:hidden;}
 .drone-wrapper{position:absolute;animation:drone-fly 18s linear infinite;}
-@keyframes drone-fly{
-  0%{left:-280px;top:28%;transform:rotate(-2deg);}15%{top:22%;transform:rotate(1deg);}
-  30%{top:30%;transform:rotate(-1deg);}45%{top:18%;transform:rotate(2deg);}
-  60%{top:26%;transform:rotate(-2deg);}75%{top:20%;transform:rotate(1deg);}
-  90%{top:28%;transform:rotate(-1deg);}100%{left:calc(100% + 280px);top:25%;transform:rotate(0deg);}
-}
+@keyframes drone-fly{0%{left:-280px;top:28%;transform:rotate(-2deg);}15%{top:22%;transform:rotate(1deg);}30%{top:30%;transform:rotate(-1deg);}45%{top:18%;transform:rotate(2deg);}60%{top:26%;transform:rotate(-2deg);}75%{top:20%;transform:rotate(1deg);}90%{top:28%;transform:rotate(-1deg);}100%{left:calc(100% + 280px);top:25%;transform:rotate(0deg);}}
 .drone-body{position:relative;width:140px;height:60px;}
-.spray-trail{
-  position:absolute;bottom:-18px;left:20px;right:20px;height:22px;
-  background:linear-gradient(180deg,rgba(0,229,160,0.35) 0%,rgba(0,229,160,0) 100%);
-  border-radius:0 0 50% 50%;animation:spray-pulse 0.8s ease-in-out infinite;filter:blur(2px);
-}
+.spray-trail{position:absolute;bottom:-18px;left:20px;right:20px;height:22px;background:linear-gradient(180deg,rgba(0,229,160,0.35) 0%,rgba(0,229,160,0) 100%);border-radius:0 0 50% 50%;animation:spray-pulse 0.8s ease-in-out infinite;filter:blur(2px);}
 @keyframes spray-pulse{0%,100%{opacity:0.5;transform:scaleX(1);}50%{opacity:0.9;transform:scaleX(1.08);}}
 .spray-drop{position:absolute;width:3px;height:3px;border-radius:50%;background:rgba(0,229,160,0.7);animation:drop-fall 1.2s ease-in infinite;}
 .spray-drop:nth-child(1){bottom:-10px;left:28%;animation-delay:0s;}
@@ -285,40 +260,15 @@ body{font-family:var(--ff-body);background:var(--bg);color:var(--t1);min-height:
 @keyframes prop-spin-r{from{transform:rotate(0deg);}to{transform:rotate(-360deg);}}
 .drone-body{animation:drone-bob 1.4s ease-in-out infinite;}
 @keyframes drone-bob{0%,100%{transform:translateY(0);}50%{transform:translateY(-5px);}}
-.drone-wrapper2{
-  position:absolute;animation:drone-fly2 28s linear infinite;animation-delay:-14s;opacity:0.35;
-}
-@keyframes drone-fly2{
-  0%{left:-200px;top:15%;transform:rotate(-1deg) scale(0.65);}
-  50%{top:20%;transform:rotate(1deg) scale(0.65);}
-  100%{left:calc(100% + 200px);top:16%;transform:rotate(-1deg) scale(0.65);}
-}
-.login-card{
-  position:relative;z-index:10;width:420px;max-width:calc(100% - 32px);
-  background:rgba(7,15,9,0.85);backdrop-filter:blur(48px) saturate(1.8);
-  border:1px solid rgba(255,255,255,0.1);border-radius:28px;padding:46px 40px 40px;text-align:center;
-  box-shadow:0 0 0 1px rgba(13,107,53,0.2),0 40px 100px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,255,255,0.08),0 0 80px rgba(13,107,53,0.08);
-}
-.login-badge{
-  display:inline-flex;align-items:center;gap:8px;
-  background:rgba(0,229,160,0.07);border:1px solid rgba(0,229,160,0.18);
-  border-radius:50px;padding:5px 14px;margin-bottom:28px;
-  font-size:10px;font-family:var(--ff-mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);
-}
+.drone-wrapper2{position:absolute;animation:drone-fly2 28s linear infinite;animation-delay:-14s;opacity:0.35;}
+@keyframes drone-fly2{0%{left:-200px;top:15%;transform:rotate(-1deg) scale(0.65);}50%{top:20%;transform:rotate(1deg) scale(0.65);}100%{left:calc(100% + 200px);top:16%;transform:rotate(-1deg) scale(0.65);}}
+.login-card{position:relative;z-index:10;width:420px;max-width:calc(100% - 32px);background:rgba(7,15,9,0.85);backdrop-filter:blur(48px) saturate(1.8);border:1px solid rgba(255,255,255,0.1);border-radius:28px;padding:46px 40px 40px;text-align:center;box-shadow:0 0 0 1px rgba(13,107,53,0.2),0 40px 100px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,255,255,0.08),0 0 80px rgba(13,107,53,0.08);}
+.login-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(0,229,160,0.07);border:1px solid rgba(0,229,160,0.18);border-radius:50px;padding:5px 14px;margin-bottom:28px;font-size:10px;font-family:var(--ff-mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);}
 .login-badge-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:blink 1.5s ease-in-out infinite;}
 @keyframes blink{0%,100%{opacity:1;}50%{opacity:0.3;}}
 .login-logo-wrap{margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:14px;}
-.login-logo-icon{
-  width:60px;height:60px;border-radius:18px;
-  background:linear-gradient(145deg,#0d6b35,#0a4020);border:1px solid rgba(13,107,53,0.5);
-  display:flex;align-items:center;justify-content:center;font-size:28px;
-  box-shadow:0 8px 24px rgba(13,107,53,0.4),inset 0 1px 0 rgba(255,255,255,0.1);
-}
-.login-card h1{
-  font-family:var(--ff-head);font-size:32px;font-weight:800;letter-spacing:-0.5px;
-  background:linear-gradient(135deg,var(--t1) 30%,var(--gold) 100%);
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px;
-}
+.login-logo-icon{width:60px;height:60px;border-radius:18px;background:linear-gradient(145deg,#0d6b35,#0a4020);border:1px solid rgba(13,107,53,0.5);display:flex;align-items:center;justify-content:center;font-size:28px;box-shadow:0 8px 24px rgba(13,107,53,0.4),inset 0 1px 0 rgba(255,255,255,0.1);}
+.login-card h1{font-family:var(--ff-head);font-size:32px;font-weight:800;letter-spacing:-0.5px;background:linear-gradient(135deg,var(--t1) 30%,var(--gold) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px;}
 .login-sub{font-size:11px;color:var(--t3);margin-bottom:32px;letter-spacing:2px;text-transform:uppercase;font-family:var(--ff-mono);}
 .field-group{margin-bottom:12px;position:relative;}
 .field-group label{display:block;text-align:left;font-size:10px;font-weight:600;color:var(--t3);margin-bottom:7px;letter-spacing:1px;text-transform:uppercase;font-family:var(--ff-mono);}
@@ -329,14 +279,7 @@ body{font-family:var(--ff-body);background:var(--bg);color:var(--t1);min-height:
 .field-wrap input:focus ~ .field-icon{color:var(--gold);}
 .eye-btn{position:absolute;right:14px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--t4);font-size:13px;padding:4px;transition:color 0.2s;}
 .eye-btn:hover{color:var(--t2);}
-.login-btn{
-  width:100%;padding:14px;margin-top:8px;
-  background:linear-gradient(135deg,#0c5e2c,#0d7a38);border:1px solid rgba(13,107,53,0.6);
-  border-radius:12px;color:#fff;font-weight:700;font-size:14px;font-family:var(--ff-body);
-  cursor:pointer;letter-spacing:0.5px;transition:all 0.25s;
-  box-shadow:0 4px 20px rgba(13,107,53,0.4),inset 0 1px 0 rgba(255,255,255,0.1);
-  position:relative;overflow:hidden;
-}
+.login-btn{width:100%;padding:14px;margin-top:8px;background:linear-gradient(135deg,#0c5e2c,#0d7a38);border:1px solid rgba(13,107,53,0.6);border-radius:12px;color:#fff;font-weight:700;font-size:14px;font-family:var(--ff-body);cursor:pointer;letter-spacing:0.5px;transition:all 0.25s;box-shadow:0 4px 20px rgba(13,107,53,0.4),inset 0 1px 0 rgba(255,255,255,0.1);position:relative;overflow:hidden;}
 .login-btn::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,0.05),transparent);opacity:0;transition:opacity 0.25s;}
 .login-btn:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(13,107,53,0.55);}
 .login-btn:hover::before{opacity:1;}
@@ -345,15 +288,8 @@ body{font-family:var(--ff-body);background:var(--bg);color:var(--t1);min-height:
 .login-err{color:var(--red);font-size:12px;margin-top:12px;display:none;padding:10px 16px;background:rgba(214,48,49,0.08);border:1px solid rgba(214,48,49,0.2);border-radius:10px;text-align:left;}
 .login-footer{margin-top:28px;font-size:10px;color:var(--t4);letter-spacing:0.5px;font-family:var(--ff-mono);}
 .login-footer span{color:var(--gold);opacity:0.7;}
-
-/* MAIN APP */
 #mainApp{display:none;}
-.sidebar{
-  position:fixed;top:0;left:0;width:256px;height:100vh;z-index:200;
-  overflow-y:auto;overflow-x:hidden;background:rgba(3,8,4,0.97);backdrop-filter:blur(20px);
-  border-right:1px solid var(--border);transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);
-  display:flex;flex-direction:column;
-}
+.sidebar{position:fixed;top:0;left:0;width:256px;height:100vh;z-index:200;overflow-y:auto;overflow-x:hidden;background:rgba(3,8,4,0.97);backdrop-filter:blur(20px);border-right:1px solid var(--border);transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);display:flex;flex-direction:column;}
 .sidebar.hidden{transform:translateX(-100%);}
 .sidebar-brand{padding:22px 20px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;flex-shrink:0;}
 .brand-icon{width:40px;height:40px;border-radius:12px;background:linear-gradient(145deg,#0c5e2c,#083a18);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;border:1px solid rgba(13,107,53,0.4);box-shadow:0 4px 12px rgba(13,107,53,0.35);}
@@ -513,20 +449,7 @@ tbody tr:hover td{background:rgba(255,255,255,0.02);}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:10px;}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.15);}
 @media(max-width:1100px){.g4{grid-template-columns:repeat(2,1fr);}.g5{grid-template-columns:repeat(3,1fr);}}
-@media(max-width:768px){
-  .sidebar{transform:translateX(-100%);}
-  .sidebar.open{transform:translateX(0);}
-  .main-wrap{margin-left:0;}
-  .menu-toggle{display:flex;}
-  #syncBadge{display:none;}
-  .g2,.g3{grid-template-columns:1fr;}
-  .g4{grid-template-columns:repeat(2,1fr);}
-  .g5{grid-template-columns:repeat(2,1fr);}
-  .content{padding:14px 12px 60px;}
-  .topbar{padding:0 14px;height:54px;}
-  .team-pill span{display:none;}
-  .weather-pill{display:none;}
-}
+@media(max-width:768px){.sidebar{transform:translateX(-100);}.sidebar.open{transform:translateX(0);}.main-wrap{margin-left:0;}.menu-toggle{display:flex;}#syncBadge{display:none;}.g2,.g3{grid-template-columns:1fr;}.g4{grid-template-columns:repeat(2,1fr);}.g5{grid-template-columns:repeat(2,1fr);}.content{padding:14px 12px 60px;}.topbar{padding:0 14px;height:54px;}.team-pill span{display:none;}.weather-pill{display:none;}}
 @media(max-width:480px){.g4,.g5{grid-template-columns:1fr;}.login-card{padding:32px 20px;}.kpi-val{font-size:20px;}.pnl-summary{flex-direction:column;}}
 .watermark{position:fixed;bottom:8px;right:12px;font-size:9px;color:rgba(255,255,255,0.06);pointer-events:none;letter-spacing:1px;font-family:var(--ff-mono);}
 .fin-card{background:linear-gradient(135deg,rgba(13,107,53,0.08),rgba(0,0,0,0.35));border:1px solid rgba(13,107,53,0.2);border-radius:var(--r);padding:20px;margin-bottom:18px;}
@@ -759,13 +682,12 @@ function load(){
   if(!AD.deletedBKIds)AD.deletedBKIds=[];
   if(!AD.deletedINVIds)AD.deletedINVIds=[];
   if(!AD.deletedUserIds)AD.deletedUserIds=[];
-  // FIX: Only add default users if not deleted AND not fired
   DEF_USERS.forEach(du=>{
     if(AD.deletedDefaults.includes(du.id))return;
     if(AD.deletedUserIds&&AD.deletedUserIds.includes(du.id))return;
     const existing=AD.users.find(u=>u.id===du.id);
     if(!existing)AD.users.push(du);
-    else if(existing.status==='fired')return; // do not reset fired users
+    else if(existing.status==='fired')return;
   });
   ['nextBK','nextINV'].forEach(k=>{if(!AD[k])AD[k]=1;});
   if(!AD.notifications)AD.notifications=[];
@@ -776,8 +698,6 @@ function load(){
   setTimeout(()=>{window._fbListen&&window._fbListen();},900);
 }
 
-// ── FIX: Clean sequential ID generation — NO Firebase key suffix ──
-// BUG FIX 1 & 2: Booking IDs like BK-0001, Invoice IDs like INV-0001
 async function bkNum(){
   const n=AD.nextBK++;save();
   return `BK-${String(n).padStart(4,'0')}`;
@@ -885,6 +805,60 @@ async function fetchWeather(lat,lon){
   }catch(e){document.getElementById('wTemp').innerText='--°C';}
 }
 
+// ============================================================
+// ── FIREBASE AUTH SYNC HELPER ──
+// Called after local validation passes. Syncs the user into
+// Firebase Auth so the security rules (auth != null) are met.
+// NEVER blocks login — all errors fall through to onDone().
+// ============================================================
+function _syncFirebaseAuth(email, password, onDone){
+  if(!window.FB?.auth){
+    // Firebase Auth module not ready yet — proceed without it
+    onDone(); return;
+  }
+  window.FB.signInWithEmailAndPassword(window.FB.auth, email, password)
+    .then(()=>{
+      // Signed in successfully — token is now attached to all DB requests
+      onDone();
+    })
+    .catch(err=>{
+      const code = err.code || '';
+      // These codes all mean "this email is not registered in Firebase Auth yet"
+      // (newer SDK versions return auth/invalid-credential instead of auth/user-not-found)
+      if(
+        code === 'auth/user-not-found'       ||
+        code === 'auth/invalid-credential'   ||
+        code === 'auth/wrong-password'       ||
+        code === 'auth/invalid-email'        ||
+        code === 'auth/operation-not-allowed'
+      ){
+        // First time this user logs in — register them in Firebase Auth
+        window.FB.createUserWithEmailAndPassword(window.FB.auth, email, password)
+          .then(()=>{
+            onDone();
+          })
+          .catch(e2=>{
+            const c2 = e2.code || '';
+            if(c2 === 'auth/email-already-in-use'){
+              // Edge case: account exists in Auth but with a different password.
+              // This can happen if password was changed locally but not synced to Auth.
+              // Proceed with local session — DB rules will use any existing valid token.
+              console.warn('[AgriSpray] Firebase Auth password mismatch — local session only');
+              onDone();
+            } else {
+              // Network error, quota exceeded, etc — never block the user
+              console.warn('[AgriSpray] Firebase Auth create failed (non-blocking):', c2);
+              onDone();
+            }
+          });
+      } else {
+        // Any other error (network, config, etc) — do not block login
+        console.warn('[AgriSpray] Firebase Auth sign-in failed (non-blocking):', code);
+        onDone();
+      }
+    });
+}
+
 // ── Auth ──
 function doLogin(){
   const e=document.getElementById('lEmail').value.trim().toLowerCase();
@@ -892,23 +866,33 @@ function doLogin(){
   const btn=document.getElementById('lBtn');
   if(!e||!p){showErr('Please enter your email and password.');return;}
   btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';
-  const attempt=()=>{
-    // FIX: Also filter out deleted users (deletedUserIds)
-    const u=AD.users.find(u=>u.email.toLowerCase()===e&&u.password===p);
-    btn.disabled=false;btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';
-    if(!u){showErr('Invalid email or password. Please try again.');return;}
-    if(u.status==='fired'){showErr('Your employment has been terminated. Contact management.');return;}
-    if(u.status==='inactive'||!u.active){showErr('Account deactivated. Contact your manager.');return;}
-    // FIX: Block deleted users from logging in
-    if((AD.deletedUserIds||[]).includes(u.id)){showErr('This account no longer exists.');return;}
-    loginSuccess(u);
+
+  // Always reset button state — called whether login succeeds or fails
+  const resetBtn=()=>{
+    btn.disabled=false;
+    btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';
   };
+
+  const attempt=()=>{
+    const u=AD.users.find(u=>u.email.toLowerCase()===e&&u.password===p);
+    if(!u){resetBtn();showErr('Invalid email or password. Please try again.');return;}
+    if(u.status==='fired'){resetBtn();showErr('Your employment has been terminated. Contact management.');return;}
+    if(u.status==='inactive'||!u.active){resetBtn();showErr('Account deactivated. Contact your manager.');return;}
+    if((AD.deletedUserIds||[]).includes(u.id)){resetBtn();showErr('This account no longer exists.');return;}
+
+    // Local validation passed — now sync with Firebase Auth (non-blocking)
+    // _syncFirebaseAuth always calls onDone() regardless of Auth outcome
+    _syncFirebaseAuth(u.email, u.password, ()=>{
+      resetBtn();
+      loginSuccess(u);
+    });
+  };
+
   if(window.firebaseReady&&window.FB){
     window.FB.get(window.FB.ref(window.FB.db,'users')).then(snap=>{
       const data=snap.val();
       if(data)Object.values(data).forEach(fu=>{
         if(!fu||!fu.id)return;
-        // FIX: Skip deleted/fired users when syncing on login
         if((AD.deletedUserIds||[]).includes(fu.id))return;
         const i=AD.users.findIndex(u=>u.id===fu.id);
         if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}
@@ -918,7 +902,9 @@ function doLogin(){
     }).catch(attempt);
   }else{attempt();}
 }
+
 function showErr(msg){const e=document.getElementById('lErr');e.style.display='block';e.innerHTML=`<i class="fas fa-exclamation-triangle"></i> ${msg}`;setTimeout(()=>e.style.display='none',5000);}
+
 function loginSuccess(u){
   CU=u;window.CU=u;
   localStorage.setItem('asp_session',JSON.stringify({id:u.id}));
@@ -932,19 +918,24 @@ function loginSuccess(u){
   initWeather();
   setTimeout(()=>{window._updatePresence&&window._updatePresence();},1500);
 }
+
 function checkSession(){
   const s=localStorage.getItem('asp_session');if(!s)return false;
   try{
     const{id}=JSON.parse(s);
-    // FIX: Reject session for fired or deleted users
     const u=AD.users.find(u=>u.id===id&&u.active&&u.status==='active');
     if(!u)return false;
     if((AD.deletedUserIds||[]).includes(id))return false;
-    loginSuccess(u);return true;
+    // Re-sync Firebase Auth token on session restore so DB rules stay satisfied
+    _syncFirebaseAuth(u.email, u.password, ()=>{ loginSuccess(u); });
+    return true;
   }catch(e){return false;}
 }
+
 function logout(){
   if(window.FB&&CU)window.FB.update(window.FB.ref(window.FB.db,`presence/${CU.id}`),{online:false,lastSeen:Date.now()}).catch(()=>{});
+  // Sign out of Firebase Auth so the token is invalidated
+  if(window.FB?.auth)window.FB.signOut(window.FB.auth).catch(()=>{});
   localStorage.removeItem('asp_session');CU=null;window.CU=null;
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('mainApp').style.display='none';
@@ -1101,8 +1092,6 @@ function renderDash(){
         </tbody></table></div>
       </div>`;
   } else if(CU.role==='pilot'){
-    // FIX: Pilots see ALL bookings (not just their assigned ones)
-    // Any pilot can complete any pending booking
     const allBK = AD.bookings;
     const myCompleted = AD.bookings.filter(b => b.completedBy === CU.id);
     const pendingAll = AD.bookings.filter(b => b.status === 'pending');
@@ -1148,7 +1137,6 @@ function renderDash(){
         </tbody></table></div>
       </div>`;
   } else {
-    // Agri officer view — shows their bookings
     const mine=AD.bookings.filter(b=>String(b.createdBy).trim()===String(CU.id).trim());
     const recentlyCompleted=mine.filter(b=>b.status==='completed'&&b.completedAt&&(Date.now()-b.completedAt)<86400000);
     area.innerHTML=`
@@ -1264,23 +1252,10 @@ window._renderTeamOnline=function(){
   if(!pList&&!sList)return;
   const presence=window._presenceData||{};
   const roleColors={manager:'#e8a020',pilot:'#00c4d4',agri:'#00b341'};const roleIcons={manager:'👑',pilot:'✈️',agri:'🌾'};
-
-  // FIX: Only show active (non-fired, non-deleted) users in Team Online
   const deletedIds=AD.deletedUserIds||[];
-  const activeUsers=AD.users.filter(u=>
-    u.status==='active' &&
-    u.active===true &&
-    !deletedIds.includes(u.id)
-  );
-
-  const usersWithPresence=activeUsers.map(u=>({
-    ...u,
-    online:(presence[u.id]||{}).online===true,
-    lastSeen:(presence[u.id]||{}).lastSeen||null
-  })).sort((a,b)=>b.online-a.online);
-
+  const activeUsers=AD.users.filter(u=>u.status==='active'&&u.active===true&&!deletedIds.includes(u.id));
+  const usersWithPresence=activeUsers.map(u=>({...u,online:(presence[u.id]||{}).online===true,lastSeen:(presence[u.id]||{}).lastSeen||null})).sort((a,b)=>b.online-a.online);
   const onlineUsers=usersWithPresence.filter(u=>u.online);
-
   if(pList)pList.innerHTML=`
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
       <div style="background:rgba(0,179,65,0.08);border:1px solid rgba(0,179,65,0.2);border-radius:12px;padding:12px 20px;display:flex;align-items:center;gap:10px;">
@@ -1298,8 +1273,6 @@ window._renderTeamOnline=function(){
         ${u.lastSeen?`<div style="font-size:9px;color:var(--t4);margin-top:3px;font-family:var(--ff-mono);">${new Date(u.lastSeen).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'})}</div>`:''}
       </div>
     </div>`).join('')}`;
-
-  // FIX: All Staff list also only shows active users (excludes fired/deleted)
   if(sList)sList.innerHTML=`<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Name</th><th>Role</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>
     ${activeUsers.map((u,i)=>{const p=presence[u.id]||{};return`<tr>
       <td style="color:var(--t3);font-size:11px;">${i+1}</td>
@@ -1309,7 +1282,6 @@ window._renderTeamOnline=function(){
       <td style="font-size:11px;color:var(--t3);font-family:var(--ff-mono);">${p.lastSeen?new Date(p.lastSeen).toLocaleString('en-PK'):'Never'}</td>
     </tr>`}).join('')}
   </tbody></table></div>`;
-
   const tc=document.getElementById('teamCount');if(tc)tc.innerText=`${onlineUsers.length} online`;
 };
 
@@ -1356,10 +1328,9 @@ function renderBookings(){
   calcBK();renderBKList(getMyBookings());updateBadges();
 }
 
-// FIX: Pilots see ALL bookings; Agri sees only their own
 function getMyBookings(){
   if(CU.role==='manager') return AD.bookings;
-  if(CU.role==='pilot')   return AD.bookings; // FIX: All bookings visible to all pilots
+  if(CU.role==='pilot')   return AD.bookings;
   return AD.bookings.filter(b=>String(b.createdBy).trim()===String(CU.id).trim());
 }
 
@@ -1420,9 +1391,6 @@ async function createBooking(){
   calcBK();renderBKList(getMyBookings());updateBadges();
   if(btn){btn.disabled=false;btn.innerHTML='<i class="fas fa-plus"></i> Create Booking';}
 }
-
-// FIX: delBK — removes from Firebase AND adds to deletedBKIds so sync never re-adds it;
-// all users (pilot/agri) lose it immediately from their local store too.
 function delBK(id){
   if(!confirm('Delete this booking permanently?'))return;
   const hasInv=AD.invoices.find(i=>i.bookingId===id);
@@ -1437,10 +1405,8 @@ function delBK(id){
   if(!AD.deletedBKIds.includes(id))AD.deletedBKIds.push(id);
   AD.bookings=AD.bookings.filter(b=>b.id!==id);
   save();
-  // FIX: Delete from Firebase so all connected clients (pilot/agri) lose it immediately
   if(window.firebaseReady&&window.FB){
     window.FB.remove(window.FB.ref(window.FB.db,`bookings/${id}`)).catch(()=>{});
-    // Write the deletion marker to a shared deleted list so other clients can purge
     window.FB.update(window.FB.ref(window.FB.db,`_deleted/bookings`),{[id]:true}).catch(()=>{});
   }
   renderBookings();window._toastMsg('Booking deleted');
@@ -1938,49 +1904,40 @@ function addEmployee(){
   let access=[];document.querySelectorAll('#accessChecks input[type=checkbox]:checked').forEach(cb=>{if(!access.includes(cb.value))access.push(cb.value);});if(!access.length)access=[...(ROLE_ACCESS[role]||['dashboard','bookings'])];if(!access.includes('dashboard')&&!access.includes('all'))access.unshift('dashboard');
   const newUser={id:'u_'+Date.now(),email,password:pwd,role,designation,name,active:true,joinDate:document.getElementById('eJoin').value||today(),salary,phone,cnic,status:'active',access};
   AD.users.push(newUser);save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${newUser.id}`),newUser).catch(()=>{});
+  // Also register new employee in Firebase Auth so they can log in with secure rules
+  if(window.FB?.auth){
+    window.FB.createUserWithEmailAndPassword(window.FB.auth, email, pwd).catch(e=>{
+      if(e.code!=='auth/email-already-in-use')console.warn('[AgriSpray] Auth pre-register failed (non-blocking):',e.code);
+    });
+  }
   window._toastMsg(`${name} added`,'success');renderEmployees();['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
 }
 function editSalary(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;const ns=prompt(`New salary for ${u.name}:`,u.salary||0);if(ns===null)return;const p=parseFloat(ns);if(isNaN(p)||p<0){window._toastMsg('Invalid','error');return;}u.salary=p;save();renderEmployees();window._toastMsg(`Salary: ${fc(p)}`,'success');}
 function setEmpStatus(uid,st){const u=AD.users.find(u=>u.id===uid);if(u){u.status=st;u.active=st==='active';save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:st,active:st==='active'}).catch(()=>{});renderEmployees();window._toastMsg(`${u.name} → ${st}`,'success');}}
-
-// FIX: delEmp — track in deletedUserIds, remove from Firebase presence, remove from Firebase users
 function delEmp(uid){
   if(!confirm('Delete permanently? This user will be removed from the entire system.'))return;
   const isDefault=DEF_USERS.some(du=>du.id===uid);
-  if(isDefault){
-    if(!AD.deletedDefaults)AD.deletedDefaults=[];
-    if(!AD.deletedDefaults.includes(uid))AD.deletedDefaults.push(uid);
-  }
-  // FIX: Track all deleted user IDs to prevent Firebase sync re-adding them
-  if(!AD.deletedUserIds)AD.deletedUserIds=[];
-  if(!AD.deletedUserIds.includes(uid))AD.deletedUserIds.push(uid);
-  AD.users=AD.users.filter(u=>u.id!==uid);
-  save();
+  if(isDefault){if(!AD.deletedDefaults)AD.deletedDefaults=[];if(!AD.deletedDefaults.includes(uid))AD.deletedDefaults.push(uid);}
+  if(!AD.deletedUserIds)AD.deletedUserIds=[];if(!AD.deletedUserIds.includes(uid))AD.deletedUserIds.push(uid);
+  AD.users=AD.users.filter(u=>u.id!==uid);save();
   if(window.firebaseReady&&window.FB){
-    // FIX: Remove from Firebase users AND presence so they disappear from Team Online
     window.FB.remove(window.FB.ref(window.FB.db,`users/${uid}`)).catch(()=>{});
     window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});
   }
   renderEmployees();window._toastMsg('Employee deleted permanently');
 }
-
-// FIX: fireEmployee — mark in Firebase AND remove from presence
 function fireEmployee(uid){
   const u=AD.users.find(u=>u.id===uid);if(!u)return;
   if(uid==='u1'){window._toastMsg('Cannot fire primary manager','error');return;}
   if(!confirm(`FIRE ${u.name.toUpperCase()}?\nThis immediately revokes all access.`))return;
-  u.status='fired';u.active=false;u.firedDate=today();u.firedBy=CU.name;
-  save();
+  u.status='fired';u.active=false;u.firedDate=today();u.firedBy=CU.name;save();
   if(window.firebaseReady&&window.FB){
-    // FIX: Update Firebase status AND remove from presence so they vanish from Team Online
     window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:'fired',active:false,firedDate:today(),firedBy:CU.name}).catch(()=>{});
     window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});
   }
   addNotif(`${u.name} has been terminated by ${CU.name}`,'error','manager');
-  window._toastMsg(`${u.name} fired`,'error');
-  renderEmployees();
+  window._toastMsg(`${u.name} fired`,'error');renderEmployees();
 }
-
 function showCreds(uid){
   const u=AD.users.find(u=>u.id===uid);if(!u)return;
   document.getElementById('pwdBox').innerHTML=`
@@ -2038,7 +1995,20 @@ function renderSettings(){
     </div>`:''}`;
 }
 function saveSettings(){AD.company=document.getElementById('sComp').value;AD.waNum=document.getElementById('sWa').value;save();window._toastMsg('Settings saved!','success');}
-function changePwd(){const o=document.getElementById('oCp').value,n=document.getElementById('nCp').value,c=document.getElementById('cfCp').value;if(o!==CU.password){window._toastMsg('Current password incorrect','error');return;}if(n!==c){window._toastMsg('Passwords do not match','error');return;}if(n.length<4){window._toastMsg('Too short','error');return;}CU.password=n;const i=AD.users.findIndex(u=>u.id===CU.id);if(i!==-1)AD.users[i].password=n;save();window._toastMsg('Password changed!','success');}
+function changePwd(){
+  const o=document.getElementById('oCp').value,n=document.getElementById('nCp').value,c=document.getElementById('cfCp').value;
+  if(o!==CU.password){window._toastMsg('Current password incorrect','error');return;}
+  if(n!==c){window._toastMsg('Passwords do not match','error');return;}
+  if(n.length<4){window._toastMsg('Too short','error');return;}
+  CU.password=n;const i=AD.users.findIndex(u=>u.id===CU.id);if(i!==-1)AD.users[i].password=n;save();
+  // Also update Firebase Auth password so login stays in sync
+  if(window.FB?.auth?.currentUser){
+    import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js').then(({updatePassword})=>{
+      updatePassword(window.FB.auth.currentUser, n).catch(e=>console.warn('[AgriSpray] Auth password update failed:',e.code));
+    });
+  }
+  window._toastMsg('Password changed!','success');
+}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(AD,null,2));a.download='agrispray_backup_'+today()+'.json';a.click();}
 function clearAllData(){if(!confirm('Delete ALL data? Cannot be undone.'))return;localStorage.clear();location.reload();}
 function importData(evt){
@@ -2079,3 +2049,6 @@ setInterval(initWeather,300000);
 </script>
 </body>
 </html>
+HTMLEOF
+echo "File written successfully"
+wc -l /mnt/user-data/outputs/agrispray-pro.html
