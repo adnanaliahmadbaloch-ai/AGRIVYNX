@@ -1899,17 +1899,82 @@ function filterEmp(){
 }
 function autoRole(){const des=document.getElementById('eDes')?.value||'';const role=DES_ROLE[des]||'agri';const defaults=ROLE_ACCESS[role]||['dashboard'];document.querySelectorAll('#accessChecks input[type=checkbox]').forEach(cb=>{cb.checked=defaults.includes('all')||defaults.includes(cb.value);});}
 function addEmployee(){
-  const name=document.getElementById('eName').value.trim();const email=document.getElementById('eEmail').value.trim().toLowerCase();const pwd=document.getElementById('ePwd').value.trim();const designation=document.getElementById('eDes').value;const role=DES_ROLE[designation]||'agri';const salary=parseFloat(document.getElementById('eSal').value)||0;const phone=document.getElementById('ePhone').value.trim();const cnic=document.getElementById('eCnic').value.trim();
-  if(!name){window._toastMsg('Name required','error');return;}if(!email||!email.includes('@')){window._toastMsg('Valid email required','error');return;}if(!pwd||pwd.length<4){window._toastMsg('Password min 4 chars','error');return;}if(AD.users.find(u=>u.email.toLowerCase()===email)){window._toastMsg('Email already registered','error');return;}
-  let access=[];document.querySelectorAll('#accessChecks input[type=checkbox]:checked').forEach(cb=>{if(!access.includes(cb.value))access.push(cb.value);});if(!access.length)access=[...(ROLE_ACCESS[role]||['dashboard','bookings'])];if(!access.includes('dashboard')&&!access.includes('all'))access.unshift('dashboard');
-  const newUser={id:'u_'+Date.now(),email,password:pwd,role,designation,name,active:true,joinDate:document.getElementById('eJoin').value||today(),salary,phone,cnic,status:'active',access};
-  AD.users.push(newUser);save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${newUser.id}`),newUser).catch(()=>{});
-  // Also register new employee in Firebase Auth so they can log in with secure rules
-  if(window.FB?.auth){
-    window.FB.createUserWithEmailAndPassword(window.FB.auth, email, pwd).catch(e=>{
-      if(e.code!=='auth/email-already-in-use')console.warn('[AgriSpray] Auth pre-register failed (non-blocking):',e.code);
-    });
+  const name = document.getElementById('eName').value.trim();
+  const email = document.getElementById('eEmail').value.trim().toLowerCase();
+  const pwd = document.getElementById('ePwd').value.trim();
+  const designation = document.getElementById('eDes').value;
+  const role = DES_ROLE[designation] || 'agri';
+  const salary = parseFloat(document.getElementById('eSal').value) || 0;
+  const phone = document.getElementById('ePhone').value.trim();
+  const cnic = document.getElementById('eCnic').value.trim();
+
+  if(!name){ window._toastMsg('Name required','error'); return; }
+  if(!email || !email.includes('@')){ window._toastMsg('Valid email required','error'); return; }
+  if(!pwd || pwd.length < 4){ window._toastMsg('Password min 4 chars','error'); return; }
+  if(AD.users.find(u => u.email.toLowerCase() === email)){ 
+    window._toastMsg('Email already registered','error'); return; 
   }
+
+  let access = [];
+  document.querySelectorAll('#accessChecks input[type=checkbox]:checked').forEach(cb => {
+    if(!access.includes(cb.value)) access.push(cb.value);
+  });
+  if(!access.length) access = [...(ROLE_ACCESS[role] || ['dashboard','bookings'])];
+  if(!access.includes('dashboard') && !access.includes('all')) access.unshift('dashboard');
+
+  const newUser = {
+    id: 'u_' + Date.now(),
+    email,
+    password: pwd,
+    role,
+    designation,
+    name,
+    active: true,
+    joinDate: document.getElementById('eJoin').value || today(),
+    salary,
+    phone,
+    cnic,
+    status: 'active',
+    access
+  };
+
+  // ====================== LOCAL SAVE ======================
+  AD.users.push(newUser);
+  save();
+
+  // ====================== FIREBASE SYNC (Improved) ======================
+  if (window.firebaseReady && window.FB) {
+    const userRef = window.FB.ref(window.FB.db, `users/${newUser.id}`);
+    
+    window.FB.set(userRef, newUser)   // Changed from update() to set()
+      .then(() => {
+        console.log('✅ Employee successfully synced to Firebase');
+      })
+      .catch(err => {
+        console.error('❌ Firebase write failed:', err);
+        window._toastMsg('Saved locally. Cloud sync failed.', 'warn');
+      });
+  }
+
+  // Register in Firebase Auth (for login)
+  if(window.FB?.auth){
+    window.FB.createUserWithEmailAndPassword(window.FB.auth, email, pwd)
+      .catch(e => {
+        if(e.code !== 'auth/email-already-in-use'){
+          console.warn('[AgriSpray] Auth pre-register failed:', e.code);
+        }
+      });
+  }
+
+  window._toastMsg(`${name} added successfully!`,'success');
+  renderEmployees();
+
+  // Clear form fields
+  ['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+}
   window._toastMsg(`${name} added`,'success');renderEmployees();['eName','eEmail','ePwd','eSal','ePhone','eCnic'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
 }
 function editSalary(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;const ns=prompt(`New salary for ${u.name}:`,u.salary||0);if(ns===null)return;const p=parseFloat(ns);if(isNaN(p)||p<0){window._toastMsg('Invalid','error');return;}u.salary=p;save();renderEmployees();window._toastMsg(`Salary: ${fc(p)}`,'success');}
