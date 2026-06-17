@@ -568,6 +568,18 @@ tbody tr{transition:background .12s;}
 .pnl-box-val{font-size:19px;font-weight:800;line-height:1;font-family:var(--ff-head);}
 .pnl-box-lbl{font-size:10px;color:var(--t3);margin-top:6px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;font-family:var(--ff-mono);}
 
+/* ── EXPENSE CLAIMS ── */
+.claim-card{background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;transition:border-color .2s;}
+.claim-card:hover{border-color:var(--border2);}
+.claim-emp{font-weight:700;font-size:13px;}
+.claim-sub{font-size:10px;color:var(--t3);margin-top:2px;}
+.claim-progress{height:6px;border-radius:20px;background:rgba(255,255,255,0.07);margin:8px 0 4px;overflow:hidden;}
+.claim-progress-fill{height:100%;border-radius:20px;transition:width .4s;}
+.claim-badge-rem{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;font-family:var(--ff-mono);}
+.claim-badge-settled{background:rgba(10,179,71,0.1);color:var(--grn);border:1px solid rgba(10,179,71,0.22);}
+.claim-badge-partial{background:rgba(212,113,26,0.1);color:var(--warn);border:1px solid rgba(212,113,26,0.22);}
+.claim-badge-none{background:rgba(192,57,43,0.09);color:#ef5350;border:1px solid rgba(192,57,43,0.22);}
+
 /* Misc */
 .info-required{border:1px solid rgba(212,113,26,0.4)!important;background:rgba(212,113,26,0.04)!important;}
 .search-input{position:relative;}
@@ -713,6 +725,7 @@ tbody tr{transition:background .12s;}
 <div class="modal" id="mScreenshot"><div class="modal-box" style="max-width:680px;"><div class="modal-hdr"><h3 id="screenshotTitle">📸 Payment Screenshot</h3><button class="modal-close" onclick="closeModal('mScreenshot')">✕</button></div><div id="screenshotBody"></div></div></div>
 <div class="modal" id="mPaySalary"><div class="modal-box" style="max-width:520px;"><div class="modal-hdr"><h3 id="paySalaryTitle">💵 Pay Employee</h3><button class="modal-close" onclick="closeModal('mPaySalary')">✕</button></div><div id="paySalaryBody"></div></div></div>
 <div class="modal" id="mSalaryHist"><div class="modal-box" style="max-width:680px;"><div class="modal-hdr"><h3 id="salaryHistTitle">📋 Payment History</h3><button class="modal-close" onclick="closeModal('mSalaryHist')">✕</button></div><div id="salaryHistBody"></div></div></div>
+<div class="modal" id="mDisburse"><div class="modal-box" style="max-width:460px;"><div class="modal-hdr"><h3 id="mDisburseTitle">💸 Disburse Expense</h3><button class="modal-close" onclick="closeModal('mDisburse')">✕</button></div><div id="mDisburseBody"></div></div></div>
 <div class="toast-wrap" id="toasts"></div>
 <div class="watermark">AGRIVYNX © 2026 — Adnan Ali Ahmad Baloch</div>
 <script>
@@ -723,7 +736,7 @@ const DEF_USERS=[{id:'u1',email:'manager@agrivynx.com',password:'Admin@123',role
 const DESIGNATIONS=['Manager','Admin / HR','Accountant','Supervisor','Drone Pilot','Agri Officer','Agronomist','Spray Technician','Technician','Warehouse Manager','Helper / Farm Laborer','Driver','Other'];
 const EXPENSE_CATS=['Fuel','Electricity Bill','Gas Bill','Maintenance','Salary','Equipment','Labour','Seeds','Fertilizers','Pesticides','Other'];
 const CAT_ICONS={'Propeller':'🪁','Motor':'⚙️','Battery':'🔋','ESC':'💡','Frame':'🔲','Spray System':'💧','Camera':'📷','Cable':'🔌','Filter':'🔵','Other':'🔧'};
-const BLANK={users:[],drones:[{id:'d1',name:'DJI Agras T40',status:'active',flights:0,hours:0,fuel:0,lastService:'',serviceHistory:[]},{id:'d2',name:'DJI Agras T20',status:'active',flights:0,hours:0,fuel:0,lastService:'',serviceHistory:[]}],generators:[{id:'g1',name:'Generator 5KVA',status:'active',fuelUsed:0,hoursRun:0,lastService:'',serviceHistory:[]}],bookings:[],invoices:[],expenses:[],investments:[],notifications:[],parts:[],partsLog:[],attendance:[],nextBK:1,nextINV:1,expCats:EXPENSE_CATS,deletedBKIds:[],deletedINVIds:[],deletedDefaults:[],deletedUserIds:[]};
+const BLANK={users:[],drones:[{id:'d1',name:'DJI Agras T40',status:'active',flights:0,hours:0,fuel:0,lastService:'',serviceHistory:[]},{id:'d2',name:'DJI Agras T20',status:'active',flights:0,hours:0,fuel:0,lastService:'',serviceHistory:[]}],generators:[{id:'g1',name:'Generator 5KVA',status:'active',fuelUsed:0,hoursRun:0,lastService:'',serviceHistory:[]}],bookings:[],invoices:[],expenses:[],investments:[],notifications:[],parts:[],partsLog:[],attendance:[],expenseClaims:[],nextBK:1,nextINV:1,expCats:EXPENSE_CATS,deletedBKIds:[],deletedINVIds:[],deletedDefaults:[],deletedUserIds:[]};
 window.AD={};Object.assign(window.AD,JSON.parse(JSON.stringify(BLANK)));
 let AD=window.AD,CU=null;window.CU=null;let _invPrint=null;window._page='dashboard';window._presenceData={};
 function save(){localStorage.setItem('asp_data',JSON.stringify(AD));window.AD=AD;}
@@ -762,6 +775,7 @@ function load(){
   if(!AD.partsLog)AD.partsLog=[];
   if(!AD.salaryPayments)AD.salaryPayments=[];
   if(!AD.attendance)AD.attendance=[];
+  if(!AD.expenseClaims)AD.expenseClaims=[];
   DEF_USERS.forEach(du=>{
     if(AD.deletedDefaults.includes(du.id)||AD.deletedUserIds.includes(du.id)) return;
     const ex=AD.users.find(u=>u.id===du.id);
@@ -784,7 +798,7 @@ function load(){
   window._fbInitialSyncPromise = (async ()=>{
     if(!window.firebaseReady||!window.FB) return;
     try{
-      const collections = ['bookings','invoices','users','attendance','expenses','investments'];
+      const collections = ['bookings','invoices','users','attendance','expenses','investments','expenseClaims'];
       const fetches = collections.map(col=>
         window.FB.get(window.FB.ref(window.FB.db, col))
           .then(snap=>({col, data:snap.val()}))
@@ -842,6 +856,14 @@ function load(){
             const i=AD.investments.findIndex(inv=>inv.id===fi.id);
             if(i===-1) AD.investments.push(fi);
             else AD.investments[i]=fi;
+          });
+        } else if(col==='expenseClaims'){
+          if(!AD.expenseClaims) AD.expenseClaims=[];
+          Object.values(data).forEach(fc=>{
+            if(!fc||!fc.id) return;
+            const i=AD.expenseClaims.findIndex(c=>c.id===fc.id);
+            if(i===-1) AD.expenseClaims.push(fc);
+            else AD.expenseClaims[i]=fc;
           });
         }
       });
@@ -988,9 +1010,218 @@ function delInv(id){const inv=AD.invoices.find(i=>i.id===id);if(!inv)return;if(!
 function printInvoice(iid){const inv=AD.invoices.find(i=>i.id===iid);if(!inv)return;_invPrint=inv;document.getElementById('printBox').innerHTML=`<div class="receipt" id="rcpt"><div class="rh" style="text-align:center;"><img src="${LOGO_DATA_URI}" style="width:80px;height:auto;display:block;margin:0 auto 4px;"><div style="font-size:16px;font-weight:900;">AGRIVYNX</div><div style="font-size:11px;">🚁 Drone Spray Service</div><div>━━━━━━━━━━━━━━━━━━━━━━━━</div></div><div><b>Invoice:</b> ${inv.id}</div><div><b>Date:</b> ${inv.date}</div><div><b>By:</b> ${inv.createdByName||'—'}</div><hr><div><b>Farmer:</b> ${inv.farmer}</div>${inv.contact?`<div><b>Contact:</b> ${inv.contact}</div>`:''}${inv.location?`<div><b>Location:</b> ${inv.location}</div>`:''}${inv.crop?`<div><b>Crop:</b> ${inv.crop}</div>`:''}<hr><div><b>Product:</b> ${inv.product||'—'}</div><div><b>Spray:</b> ${inv.sprayType||'—'}</div><div><b>Acres:</b> ${inv.acres}</div><div><b>Rate/Acre:</b> ${fc(inv.price)}</div>${inv.discount>0?`<div><b>Discount:</b> -${fc(inv.discount)}/ac</div>`:''}<hr><div style="font-size:14px;font-weight:900;"><b>TOTAL: ${fc(inv.total)}</b></div><div><b>Paid:</b> ${fc(inv.paid)}</div><div><b>Method:</b> ${inv.paymentMethod}${inv.transactionId?' #'+inv.transactionId:''}</div>${inv.change>0?`<div><b>Change:</b> ${fc(inv.change)}</div>`:''}<hr><div class="rf" style="color:#4caf50;font-weight:bold;">✅ PAYMENT RECEIVED</div><div class="rf">Thank you — AGRIVYNX</div></div>`;openModal('mPrint');}
 async function savePDF(){const{jsPDF}=window.jspdf;const el=document.getElementById('rcpt');const canvas=await html2canvas(el,{scale:3,backgroundColor:'#fff'});const img=canvas.toDataURL('image/png');const pdf=new jsPDF({unit:'mm',format:[80,canvas.height*80/canvas.width]});pdf.addImage(img,'PNG',0,0,80,canvas.height*80/canvas.width);pdf.save(`${_invPrint?.id||'invoice'}.pdf`);window._toastMsg('PDF saved!','success');}
 function thermalPrint(){const rc=document.getElementById('rcpt');if(!rc)return;const w=window.open('','_blank','width=320,height=600');w.document.write(`<html><head><title>Receipt</title><style>body{font-family:monospace;padding:8px;background:#fff;color:#000;font-size:11px;width:280px;}hr{border:none;border-top:1px dashed #999;margin:4px 0;}.t-logo{display:block;width:72px;height:auto;margin:0 auto 4px;}</style></head><body><div style="text-align:center;"><img src="${LOGO_DATA_URI}" class="t-logo" alt="AGRIVYNX"></div>${rc.innerHTML}<script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500);}<\/script></body></html>`);w.document.close();}
-function renderExpenses(){if(!canAccess('expenses')&&!canUserApproveExpense()){document.getElementById('content').innerHTML='<div class="card" style="padding:40px;text-align:center;color:var(--t3);">Access restricted</div>';return;}const fin=getFinancials();const pendingExpCount=AD.expenses.filter(e=>e.status==='pending'||e.status==='partial').length;const approvers=getExpenseApprovers();document.getElementById('content').innerHTML=`<div class="g5"><div class="kpi" style="--kpi-color:var(--gold);border-color:rgba(232,160,32,0.2);background:rgba(232,160,32,0.04);"><div class="kpi-val" style="color:var(--gold);">${fc(fin.opFund40)}</div><div class="kpi-lbl">40% Op. Fund</div></div><div class="kpi" style="--kpi-color:var(--red)"><div class="kpi-val" style="color:#ef5350;">${fc(fin.totExp)}</div><div class="kpi-lbl">Approved Spend</div></div><div class="kpi" style="--kpi-color:var(--warn);"><div class="kpi-val" style="color:var(--warn);">${fc(fin.pendingExp||0)}</div><div class="kpi-lbl">Pending Approval</div></div><div class="kpi" style="--kpi-color:${fin.opBalance>=0?'var(--grn)':'var(--red)'}"><div class="kpi-val" style="color:${fin.opBalance>=0?'var(--grn)':'#ef5350'};">${fc(fin.opBalance)}</div><div class="kpi-lbl">Remaining</div></div><div class="kpi" style="--kpi-color:#b39ddb;border-color:rgba(139,111,190,0.2);background:rgba(139,111,190,0.04);"><div class="kpi-val" style="color:#b39ddb;">${fc(fin.saving60)}</div><div class="kpi-lbl">60% Drone Pool</div></div></div><div style="margin-bottom:18px;background:rgba(232,160,32,0.05);border:1px solid rgba(232,160,32,0.12);border-radius:var(--r);padding:20px;"><div style="font-family:var(--ff-head);font-size:12px;font-weight:700;color:var(--gold);margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">&#x1F4B0; Operational Fund Overview</div><div class="progress-bar" style="height:6px;"><div class="progress-fill" style="width:${Math.min(100,(fin.totExp/Math.max(fin.opFund40,1))*100)}%;background:linear-gradient(90deg,var(--gold),var(--goldd));"></div></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:6px;font-family:var(--ff-mono);"><span>Approved: ${fc(fin.totExp)} (${((fin.totExp/Math.max(fin.opFund40,1))*100).toFixed(1)}%)</span><span>Pending: ${fc(fin.pendingExp||0)} &middot; Remaining: ${fc(fin.opBalance)}</span></div><div style="margin-top:10px;background:rgba(0,0,0,0.2);border-radius:8px;padding:8px 12px;font-size:11px;"><span style="color:var(--t3);">Expense Approvers: </span>${approvers.length===0?'<span style="color:var(--red);">&#x26A0;&#xFE0F; None configured</span>':approvers.map(a=>`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(232,160,32,0.08);border:1px solid rgba(232,160,32,0.18);border-radius:12px;padding:2px 8px;font-size:10px;color:var(--gold);margin-left:4px;">${a.name} <span style="opacity:.6;">(${a.role})</span></span>`).join('')}</div></div><div class="card"><div class="card-title">&#x2795; Add Expense</div><div class="g2"><div><label>Date</label><input type="date" id="expDate" value="${today()}"></div><div><label>Category</label><select id="expCat">${(AD.expCats||EXPENSE_CATS).map(c=>`<option>${c}</option>`).join('')}</select></div><div><label>Amount (&#x20A8;)</label><input type="number" id="expAmt" placeholder="0"></div><div><label>Description</label><input id="expDesc" placeholder="Optional"></div></div><button class="btn btn-primary" style="margin-top:12px;" onclick="addExpense()"><i class="fas fa-plus"></i> Add Expense</button></div><div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;"><div class="card-title" style="margin:0;padding:0;border:none;">&#x1F4CB; Expense History ${pendingExpCount>0?`<span class="nav-badge" style="background:var(--warn);color:#000;display:inline-flex;margin-left:8px;">${pendingExpCount}</span>`:''}</div><select id="expStatusFilter" onchange="renderExpenses()" style="padding:7px 12px;border-radius:30px;width:160px;"><option value="">All</option><option value="pending">Pending</option><option value="partial">Partial</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Category</th><th>Employee</th><th>Amount</th><th>Description</th><th>Approval Chain</th><th>Actions</th></tr></thead><tbody>${(()=>{const flt=document.getElementById('expStatusFilter')?.value||'';const list=(flt?AD.expenses.filter(e=>{const st=getExpStatus(e);return st===flt;}):AD.expenses).slice().reverse();if(!list.length)return'<tr><td colspan="7" style="color:var(--t3);text-align:center;padding:20px;">No expenses</td></tr>';return list.map(e=>{if(!e.approvals)e.approvals=[];const req=e.requiredApprovals||1;const approved=e.approvals.filter(a=>a.action==='approve').length;const est=getExpStatus(e);const statusBadge=est==='approved'?'<span class="badge b-approved" style="font-size:9px;"><i class="fas fa-check-double" style="margin-right:2px;"></i>Approved</span>':est==='rejected'?'<span class="badge b-rejected" style="font-size:9px;"><i class="fas fa-times" style="margin-right:2px;"></i>Rejected</span>':est==='partial'?`<span class="badge b-partial" style="font-size:9px;"><i class="fas fa-spinner" style="margin-right:2px;"></i>${approved}/${req}</span>`:'<span class="badge b-pending" style="font-size:9px;"><i class="fas fa-clock" style="margin-right:2px;"></i>Pending</span>';const chainHTML=e.approvals.length>0?`<div class="approval-chain" style="margin-top:4px;">${e.approvals.map(a=>`<span class="approval-step ${a.action==='approve'?'done':'rejected'}" title="${a.name} on ${a.at}"><i class="fas fa-${a.action==='approve'?'check':'times'}"></i> ${a.name.split(' ')[0]}</span>`).join('')}</div>`:'';const canAct=canUserApproveExpense()&&est!=='approved'&&est!=='rejected'&&!e.approvals.find(a=>a.by===CU.id);const alreadyActed=e.approvals.find(a=>a.by===CU.id);return`<tr><td style="font-family:var(--ff-mono);font-size:11px;">${e.date}</td><td>${e.category}</td><td style="font-size:11px;">${e.employeeName||'&#x2014;'}</td><td style="color:${e.category==='Salary'?'#ef5350':'var(--warn)'};font-weight:600;font-family:var(--ff-mono);">${fc(e.amount)}</td><td style="font-size:11px;">${e.description||'&#x2014;'}</td><td style="font-size:11px;">${statusBadge}${chainHTML}${est==='rejected'&&e.rejectionReason?`<div style="font-size:9px;color:var(--red);margin-top:2px;font-style:italic;">"${e.rejectionReason}"</div>`:''}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap;">${canAct?`<button class="btn btn-success btn-xs" onclick="openExpApprove(${e.id})"><i class="fas fa-check"></i> Review</button>`:''}<button class="btn btn-secondary btn-xs" onclick="openExpApprove(${e.id})" title="View details"><i class="fas fa-eye"></i></button><button class="btn btn-danger btn-xs" onclick="delExp(${e.id})"><i class="fas fa-trash"></i></button></div></td></tr>`;}).join('');})()}</tbody></table></div></div><div class="card"><div class="card-title">&#x1F4B0; Process Salary</div><button class="btn btn-success btn-sm" onclick="processSalary()"><i class="fas fa-money-bill-wave"></i> Process Monthly Salary</button></div>`;
+function renderExpenses(){if(!canAccess('expenses')&&!canUserApproveExpense()){document.getElementById('content').innerHTML='<div class="card" style="padding:40px;text-align:center;color:var(--t3);">Access restricted</div>';return;}const fin=getFinancials();const pendingExpCount=AD.expenses.filter(e=>e.status==='pending'||e.status==='partial').length;const approvers=getExpenseApprovers();document.getElementById('content').innerHTML=`<div class="g5"><div class="kpi" style="--kpi-color:var(--gold);border-color:rgba(232,160,32,0.2);background:rgba(232,160,32,0.04);"><div class="kpi-val" style="color:var(--gold);">${fc(fin.opFund40)}</div><div class="kpi-lbl">40% Op. Fund</div></div><div class="kpi" style="--kpi-color:var(--red)"><div class="kpi-val" style="color:#ef5350;">${fc(fin.totExp)}</div><div class="kpi-lbl">Approved Spend</div></div><div class="kpi" style="--kpi-color:var(--warn);"><div class="kpi-val" style="color:var(--warn);">${fc(fin.pendingExp||0)}</div><div class="kpi-lbl">Pending Approval</div></div><div class="kpi" style="--kpi-color:${fin.opBalance>=0?'var(--grn)':'var(--red)'}"><div class="kpi-val" style="color:${fin.opBalance>=0?'var(--grn)':'#ef5350'};">${fc(fin.opBalance)}</div><div class="kpi-lbl">Remaining</div></div><div class="kpi" style="--kpi-color:#b39ddb;border-color:rgba(139,111,190,0.2);background:rgba(139,111,190,0.04);"><div class="kpi-val" style="color:#b39ddb;">${fc(fin.saving60)}</div><div class="kpi-lbl">60% Drone Pool</div></div></div><div style="margin-bottom:18px;background:rgba(232,160,32,0.05);border:1px solid rgba(232,160,32,0.12);border-radius:var(--r);padding:20px;"><div style="font-family:var(--ff-head);font-size:12px;font-weight:700;color:var(--gold);margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">&#x1F4B0; Operational Fund Overview</div><div class="progress-bar" style="height:6px;"><div class="progress-fill" style="width:${Math.min(100,(fin.totExp/Math.max(fin.opFund40,1))*100)}%;background:linear-gradient(90deg,var(--gold),var(--goldd));"></div></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:6px;font-family:var(--ff-mono);"><span>Approved: ${fc(fin.totExp)} (${((fin.totExp/Math.max(fin.opFund40,1))*100).toFixed(1)}%)</span><span>Pending: ${fc(fin.pendingExp||0)} &middot; Remaining: ${fc(fin.opBalance)}</span></div><div style="margin-top:10px;background:rgba(0,0,0,0.2);border-radius:8px;padding:8px 12px;font-size:11px;"><span style="color:var(--t3);">Expense Approvers: </span>${approvers.length===0?'<span style="color:var(--red);">&#x26A0;&#xFE0F; None configured</span>':approvers.map(a=>`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(232,160,32,0.08);border:1px solid rgba(232,160,32,0.18);border-radius:12px;padding:2px 8px;font-size:10px;color:var(--gold);margin-left:4px;">${a.name} <span style="opacity:.6;">(${a.role})</span></span>`).join('')}</div></div><div class="card"><div class="card-title">&#x2795; Add General Expense</div><div class="g2"><div><label>Date</label><input type="date" id="expDate" value="${today()}"></div><div><label>Category</label><select id="expCat">${(AD.expCats||EXPENSE_CATS).map(c=>`<option>${c}</option>`).join('')}</select></div><div><label>Employee (optional)</label><select id="expEmpSel"><option value="">— None / General —</option>${AD.users.filter(u=>u.status==='active').map(u=>`<option value="${u.id}">${u.name} (${u.designation||u.role})</option>`).join('')}</select></div><div><label>Amount (&#x20A8;)</label><input type="number" id="expAmt" placeholder="0"></div><div><label>Description</label><input id="expDesc" placeholder="Optional"></div></div><button class="btn btn-primary" style="margin-top:12px;" onclick="addExpense()"><i class="fas fa-plus"></i> Add Expense</button></div><div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;"><div class="card-title" style="margin:0;padding:0;border:none;">&#x1F4CB; Expense History ${pendingExpCount>0?`<span class="nav-badge" style="background:var(--warn);color:#000;display:inline-flex;margin-left:8px;">${pendingExpCount}</span>`:''}</div><select id="expStatusFilter" onchange="renderExpenses()" style="padding:7px 12px;border-radius:30px;width:160px;"><option value="">All</option><option value="pending">Pending</option><option value="partial">Partial</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Category</th><th>Employee</th><th>Amount</th><th>Description</th><th>Approval Chain</th><th>Actions</th></tr></thead><tbody>${(()=>{const flt=document.getElementById('expStatusFilter')?.value||'';const list=(flt?AD.expenses.filter(e=>{const st=getExpStatus(e);return st===flt;}):AD.expenses).slice().reverse();if(!list.length)return'<tr><td colspan="7" style="color:var(--t3);text-align:center;padding:20px;">No expenses</td></tr>';return list.map(e=>{if(!e.approvals)e.approvals=[];const req=e.requiredApprovals||1;const approved=e.approvals.filter(a=>a.action==='approve').length;const est=getExpStatus(e);const statusBadge=est==='approved'?'<span class="badge b-approved" style="font-size:9px;"><i class="fas fa-check-double" style="margin-right:2px;"></i>Approved</span>':est==='rejected'?'<span class="badge b-rejected" style="font-size:9px;"><i class="fas fa-times" style="margin-right:2px;"></i>Rejected</span>':est==='partial'?`<span class="badge b-partial" style="font-size:9px;"><i class="fas fa-spinner" style="margin-right:2px;"></i>${approved}/${req}</span>`:'<span class="badge b-pending" style="font-size:9px;"><i class="fas fa-clock" style="margin-right:2px;"></i>Pending</span>';const chainHTML=e.approvals.length>0?`<div class="approval-chain" style="margin-top:4px;">${e.approvals.map(a=>`<span class="approval-step ${a.action==='approve'?'done':'rejected'}" title="${a.name} on ${a.at}"><i class="fas fa-${a.action==='approve'?'check':'times'}"></i> ${a.name.split(' ')[0]}</span>`).join('')}</div>`:'';const canAct=canUserApproveExpense()&&est!=='approved'&&est!=='rejected'&&!e.approvals.find(a=>a.by===CU.id);const alreadyActed=e.approvals.find(a=>a.by===CU.id);return`<tr><td style="font-family:var(--ff-mono);font-size:11px;">${e.date}</td><td>${e.category}</td><td style="font-size:11px;">${e.employeeName||'&#x2014;'}</td><td style="color:${e.category==='Salary'?'#ef5350':'var(--warn)'};font-weight:600;font-family:var(--ff-mono);">${fc(e.amount)}</td><td style="font-size:11px;">${e.description||'&#x2014;'}</td><td style="font-size:11px;">${statusBadge}${chainHTML}${est==='rejected'&&e.rejectionReason?`<div style="font-size:9px;color:var(--red);margin-top:2px;font-style:italic;">"${e.rejectionReason}"</div>`:''}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap;">${canAct?`<button class="btn btn-success btn-xs" onclick="openExpApprove(${e.id})"><i class="fas fa-check"></i> Review</button>`:''}<button class="btn btn-secondary btn-xs" onclick="openExpApprove(${e.id})" title="View details"><i class="fas fa-eye"></i></button><button class="btn btn-danger btn-xs" onclick="delExp(${e.id})"><i class="fas fa-trash"></i></button></div></td></tr>`;}).join('');})()}</tbody></table></div></div><div class="card" style="border-color:rgba(0,212,138,0.2);background:rgba(0,212,138,0.03);"><div class="card-title" style="color:var(--accent);">&#x1F4B8; Employee Expense Claims <span style="font-size:9px;font-weight:400;color:var(--t3);text-transform:none;letter-spacing:0;margin-left:6px;">Track claimed vs disbursed per employee</span></div><div class="g2" style="margin-bottom:16px;"><div><label>Employee *</label><select id="claimEmpSel">${AD.users.filter(u=>u.status==="active").map(u=>`<option value="${u.id}">${u.name} (${u.designation||u.role})</option>`).join("")}</select></div><div><label>Date</label><input type="date" id="claimDate" value="${today()}"></div><div><label>Claim Amount (&#x20A8;) *</label><input type="number" id="claimAmt" placeholder="e.g. 10000" min="0"></div><div><label>Purpose / Description *</label><input id="claimDesc" placeholder="e.g. Field trip fuel, Site visit"></div></div><button class="btn btn-primary" style="margin-bottom:18px;" onclick="addExpenseClaim()"><i class="fas fa-plus"></i> Add Claim</button><div id="claimsList"></div></div><div class="card"><div class="card-title">&#x1F4B0; Process Salary</div><button class="btn btn-success btn-sm" onclick="processSalary()"><i class="fas fa-money-bill-wave"></i> Process Monthly Salary</button></div>`;
+  renderClaimsList();
 }
-function addExpense(){const amt=parseFloat(document.getElementById('expAmt').value)||0;if(amt<=0){window._toastMsg('Enter valid amount','error');return;}const approvers=getExpenseApprovers();const required=Math.min(3,Math.max(1,approvers.length));AD.expenses.push({id:Date.now()+Math.random(),date:document.getElementById('expDate').value,category:document.getElementById('expCat').value,amount:amt,description:document.getElementById('expDesc').value,status:'pending',approvedBy:null,approvedAt:null,approvals:[],requiredApprovals:required,rejectedBy:null,rejectedAt:null,rejectionReason:null});save();renderExpenses();window._toastMsg('Expense added — awaiting '+required+' approver(s)','success');}
+function addExpense(){
+  const amt=parseFloat(document.getElementById('expAmt')?.value)||0;
+  if(amt<=0){window._toastMsg('Enter valid amount','error');return;}
+  const approvers=getExpenseApprovers();
+  const required=Math.min(3,Math.max(1,approvers.length));
+  const empId=document.getElementById('expEmpSel')?.value||'';
+  const emp=empId?AD.users.find(u=>u.id===empId):null;
+  AD.expenses.push({
+    id:Date.now()+Math.random(),
+    date:document.getElementById('expDate')?.value||today(),
+    category:document.getElementById('expCat')?.value||'Other',
+    employeeId:emp?emp.id:null,
+    employeeName:emp?emp.name:null,
+    employeeRole:emp?(emp.designation||emp.role):null,
+    amount:amt,
+    description:document.getElementById('expDesc')?.value||'',
+    status:'pending',
+    approvedBy:null,approvedAt:null,
+    approvals:[],requiredApprovals:required,
+    rejectedBy:null,rejectedAt:null,rejectionReason:null
+  });
+  save();
+  renderExpenses();
+  window._toastMsg('Expense added — awaiting '+required+' approver(s)','success');
+}
+function addExpenseClaim(){
+  if(!AD.expenseClaims)AD.expenseClaims=[];
+  const empId=document.getElementById('claimEmpSel')?.value;
+  const amt=parseFloat(document.getElementById('claimAmt')?.value)||0;
+  const desc=(document.getElementById('claimDesc')?.value||'').trim();
+  if(!empId){window._toastMsg('Select an employee','error');return;}
+  if(amt<=0){window._toastMsg('Enter a valid claim amount','error');return;}
+  if(!desc){window._toastMsg('Enter a purpose/description','error');return;}
+  const emp=AD.users.find(u=>u.id===empId);if(!emp)return;
+  const claim={
+    id:'clm_'+Date.now()+'_'+Math.random().toString(36).slice(2),
+    employeeId:empId,
+    employeeName:emp.name,
+    employeeRole:emp.designation||emp.role,
+    date:document.getElementById('claimDate')?.value||today(),
+    claimedAmount:amt,
+    description:desc,
+    disbursements:[],
+    createdBy:CU.id,
+    createdByName:CU.name,
+    createdAt:Date.now()
+  };
+  AD.expenseClaims.push(claim);
+  save();
+  if(window.firebaseReady&&window.FB){
+    window.FB.set(window.FB.ref(window.FB.db,'expenseClaims/'+claim.id),claim).catch(()=>{});
+  }
+  window._toastMsg('Expense claim added for '+emp.name,'success');
+  ['claimAmt','claimDesc'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  renderClaimsList();
+}
+
+function getClaimTotals(claim){
+  const disbursed=(claim.disbursements||[]).reduce((s,d)=>s+d.amount,0);
+  const remaining=Math.max(0,claim.claimedAmount-disbursed);
+  return{disbursed,remaining};
+}
+
+function renderClaimsList(){
+  if(!AD.expenseClaims)AD.expenseClaims=[];
+  const con=document.getElementById('claimsList');
+  if(!con)return;
+  const claims=[...AD.expenseClaims].reverse();
+  if(!claims.length){
+    con.innerHTML='<div style="text-align:center;padding:20px;color:var(--t3);font-size:12px;">No expense claims yet. Add one above.</div>';
+    return;
+  }
+  con.innerHTML=`<div class="tbl-wrap"><table>
+    <thead><tr>
+      <th>Date</th><th>Employee</th><th>Purpose</th>
+      <th>Claimed</th><th>Disbursed</th><th>Remaining</th><th>Status</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    ${claims.map(c=>{
+      const{disbursed,remaining}=getClaimTotals(c);
+      const pct=c.claimedAmount>0?Math.min(100,(disbursed/c.claimedAmount)*100):0;
+      const settled=remaining<=0;
+      const partial=disbursed>0&&remaining>0;
+      const statusBadge=settled
+        ?'<span class="claim-badge-rem claim-badge-settled"><i class="fas fa-check-circle"></i> Settled</span>'
+        :partial
+        ?'<span class="claim-badge-rem claim-badge-partial"><i class="fas fa-spinner"></i> Partial</span>'
+        :'<span class="claim-badge-rem claim-badge-none"><i class="fas fa-clock"></i> Pending</span>';
+      const canDisburse=CU.role==='manager'||CU.canApproveExpense;
+      return`<tr>
+        <td style="font-family:var(--ff-mono);font-size:11px;">${c.date}</td>
+        <td><strong>${c.employeeName}</strong><div style="font-size:10px;color:var(--t3);">${c.employeeRole||''}</div></td>
+        <td style="font-size:11px;max-width:150px;">${c.description}</td>
+        <td style="color:var(--warn);font-weight:700;font-family:var(--ff-mono);">${fc(c.claimedAmount)}</td>
+        <td style="color:var(--grn);font-weight:700;font-family:var(--ff-mono);">${fc(disbursed)}</td>
+        <td>
+          <div style="font-weight:800;font-family:var(--ff-mono);font-size:13px;color:${remaining>0?'#ef5350':'var(--grn)'};">${fc(remaining)}</div>
+          <div style="margin-top:4px;height:4px;border-radius:10px;background:rgba(255,255,255,0.07);overflow:hidden;min-width:80px;">
+            <div style="height:100%;width:${pct}%;background:${settled?'var(--grn)':partial?'var(--warn)':'rgba(239,83,80,0.6)'};border-radius:10px;transition:width .4s;"></div>
+          </div>
+          <div style="font-size:9px;color:var(--t3);margin-top:2px;font-family:var(--ff-mono);">${pct.toFixed(0)}% paid</div>
+        </td>
+        <td>${statusBadge}</td>
+        <td><div style="display:flex;gap:4px;flex-wrap:wrap;">
+          ${canDisburse&&!settled?`<button class="btn btn-success btn-xs" onclick="openDisburse('${c.id}')"><i class="fas fa-money-bill-wave"></i> Pay</button>`:''}
+          <button class="btn btn-secondary btn-xs" onclick="openDisburse('${c.id}')" title="View"><i class="fas fa-eye"></i></button>
+          <button class="btn btn-danger btn-xs" onclick="delClaim('${c.id}')"><i class="fas fa-trash"></i></button>
+        </div></td>
+      </tr>`;
+    }).join('')}
+    </tbody></table></div>`;
+}
+
+function openDisburse(cid){
+  if(!AD.expenseClaims)AD.expenseClaims=[];
+  const claim=AD.expenseClaims.find(c=>c.id===cid);
+  if(!claim){window._toastMsg('Claim not found','error');return;}
+  const{disbursed,remaining}=getClaimTotals(claim);
+  const canDisburse=(CU.role==='manager'||CU.canApproveExpense)&&remaining>0;
+  document.getElementById('mDisburseTitle').innerHTML='&#x1F4B8; Disburse — '+claim.employeeName;
+  document.getElementById('mDisburseBody').innerHTML=`
+    <div style="background:rgba(0,0,0,0.28);border-radius:12px;padding:14px 16px;margin-bottom:14px;">
+      <div style="font-size:11px;color:var(--t3);margin-bottom:6px;">Claim Details</div>
+      <div style="font-size:18px;font-weight:800;color:var(--warn);font-family:var(--ff-head);">${fc(claim.claimedAmount)} <span style="font-size:11px;font-weight:400;color:var(--t3);">claimed</span></div>
+      <div style="font-size:12px;margin-top:4px;">${claim.description}</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:3px;">${claim.employeeName} &middot; ${claim.date}</div>
+      <div style="margin-top:12px;display:flex;gap:20px;flex-wrap:wrap;">
+        <div><div style="font-size:11px;color:var(--t3);">Disbursed</div><div style="font-size:16px;font-weight:800;color:var(--grn);font-family:var(--ff-head);">${fc(disbursed)}</div></div>
+        <div><div style="font-size:11px;color:var(--t3);">Remaining</div><div style="font-size:16px;font-weight:800;color:${remaining>0?'#ef5350':'var(--grn)'};font-family:var(--ff-head);">${fc(remaining)}</div></div>
+      </div>
+      <div style="margin-top:10px;height:6px;border-radius:10px;background:rgba(255,255,255,0.07);overflow:hidden;">
+        <div style="height:100%;width:${Math.min(100,claim.claimedAmount>0?(disbursed/claim.claimedAmount)*100:0)}%;background:${remaining<=0?'var(--grn)':'var(--warn)'};border-radius:10px;"></div>
+      </div>
+    </div>
+    ${claim.disbursements&&claim.disbursements.length>0?`
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px;">Disbursement History</div>
+      ${claim.disbursements.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:8px;margin-bottom:6px;font-size:12px;">
+        <div><strong style="color:var(--grn);font-family:var(--ff-mono);">${fc(d.amount)}</strong> <span style="color:var(--t3);font-size:10px;">via ${d.method||'Cash'}</span></div>
+        <div style="color:var(--t3);font-size:10px;text-align:right;">${d.date}<br>${d.by||''}</div>
+      </div>`).join('')}
+    </div>`:''}
+    ${canDisburse?`
+    <div style="border-top:1px solid var(--border);padding-top:14px;">
+      <div style="font-size:11px;font-weight:700;color:var(--t2);margin-bottom:10px;">Disburse Payment</div>
+      <div class="g2">
+        <div><label>Amount (&#x20A8;) *</label><input type="number" id="disbAmt" placeholder="e.g. 5000" value="${remaining}" min="0" max="${remaining}"></div>
+        <div><label>Payment Method</label><select id="disbMethod"><option value="cash">&#x1F4B5; Cash</option><option value="bank">&#x1F3E6; Bank Transfer</option><option value="easypaisa">&#x1F4F1; EasyPaisa</option><option value="jazzcash">&#x1F4F1; JazzCash</option></select></div>
+        <div style="grid-column:1/-1;"><label>Notes (optional)</label><input id="disbNotes" placeholder="e.g. Partial payment..."></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button class="btn btn-success" onclick="submitDisburse('${cid}')"><i class="fas fa-money-bill-wave"></i> Disburse</button>
+        <button class="btn btn-outline" onclick="closeModal('mDisburse')">Cancel</button>
+      </div>
+    </div>`:'<div style="padding:10px 14px;background:rgba(10,179,71,0.07);border:1px solid rgba(10,179,71,0.18);border-radius:8px;font-size:12px;color:var(--grn);"><i class="fas fa-check-circle" style="margin-right:5px;"></i>This expense has been fully settled.</div>'}
+  `;
+  openModal('mDisburse');
+}
+
+function submitDisburse(cid){
+  if(!AD.expenseClaims)AD.expenseClaims=[];
+  const claim=AD.expenseClaims.find(c=>c.id===cid);
+  if(!claim){window._toastMsg('Claim not found','error');return;}
+  const amt=parseFloat(document.getElementById('disbAmt')?.value)||0;
+  if(amt<=0){window._toastMsg('Enter a valid amount','error');return;}
+  const{remaining}=getClaimTotals(claim);
+  if(amt>remaining){window._toastMsg(`Cannot exceed remaining ₨${remaining.toLocaleString()}`,'error');return;}
+  const method=document.getElementById('disbMethod')?.value||'cash';
+  const notes=(document.getElementById('disbNotes')?.value||'').trim();
+  if(!claim.disbursements)claim.disbursements=[];
+  claim.disbursements.push({amount:amt,method,date:today(),by:CU.name,notes});
+  // Also record in expenses
+  AD.expenses.push({
+    id:Date.now()+Math.random(),
+    date:today(),
+    category:'Other',
+    employeeId:claim.employeeId,
+    employeeName:claim.employeeName,
+    employeeRole:claim.employeeRole,
+    amount:amt,
+    description:`Expense disbursement — ${claim.employeeName}: ${claim.description}${notes?' ('+notes+')':''}`,
+    status:'approved',
+    approvedBy:CU.name,
+    approvedAt:today(),
+    approvals:[{by:CU.id,name:CU.name,at:today(),action:'approve'}],
+    requiredApprovals:1
+  });
+  save();
+  if(window.firebaseReady&&window.FB){
+    window.FB.update(window.FB.ref(window.FB.db,'expenseClaims/'+cid),{disbursements:claim.disbursements}).catch(()=>{});
+  }
+  const newRem=Math.max(0,claim.claimedAmount-(claim.disbursements||[]).reduce((s,d)=>s+d.amount,0));
+  window._toastMsg(`${fc(amt)} disbursed to ${claim.employeeName}. Remaining: ${fc(newRem)}`,'success');
+  closeModal('mDisburse');
+  renderExpenses();
+}
+
+function delClaim(cid){
+  if(!confirm('Delete this expense claim?'))return;
+  if(!AD.expenseClaims)AD.expenseClaims=[];
+  AD.expenseClaims=AD.expenseClaims.filter(c=>c.id!==cid);
+  save();
+  if(window.firebaseReady&&window.FB){
+    window.FB.remove(window.FB.ref(window.FB.db,'expenseClaims/'+cid)).catch(()=>{});
+  }
+  renderClaimsList();
+  window._toastMsg('Claim deleted','info');
+}
+
 function delExp(id){if(!confirm('Delete this expense?'))return;AD.expenses=AD.expenses.filter(e=>e.id!==id);save();renderExpenses();}
 function getExpenseApprovers(){return AD.users.filter(u=>u.status==='active'&&u.active&&(u.role==='manager'||u.canApproveExpense===true));}
 function canUserApproveExpense(){return CU&&(CU.role==='manager'||CU.canApproveExpense===true);}
