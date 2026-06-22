@@ -127,33 +127,6 @@ onValue(ref(db,'drones'),snap=>{
   if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('drones');}
 });
 
-// ── GENERATORS realtime listener ──
-onValue(ref(db,'generators'),snap=>{
-  if(!window.AD)return;
-  const data=snap.val();if(!data)return;
-  let changed=false;
-  Object.values(data).forEach(fg=>{
-    if(!fg||!fg.id)return;
-    if(!window.AD.generators)window.AD.generators=[];
-    const i=window.AD.generators.findIndex(g=>g.id===fg.id);
-    if(i===-1){window.AD.generators.push(fg);changed=true;}
-    else if(JSON.stringify(window.AD.generators[i])!==JSON.stringify(fg)){window.AD.generators[i]=fg;changed=true;}
-  });
-  if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('generators');}
-});
-
-// ── _DELETED tombstone listener — removes hard-deleted records from all open devices ──
-onValue(ref(db,'_deleted/bookings'),snap=>{
-  if(!window.AD)return;
-  const tombstones=snap.val();if(!tombstones)return;
-  let changed=false;
-  Object.keys(tombstones).forEach(id=>{
-    const i=window.AD.bookings?window.AD.bookings.findIndex(b=>b.id===id):-1;
-    if(i!==-1){window.AD.bookings.splice(i,1);if(!window.AD.deletedBKIds)window.AD.deletedBKIds=[];if(!window.AD.deletedBKIds.includes(id))window.AD.deletedBKIds.push(id);changed=true;}
-  });
-  if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('bookings');window.renderDash&&(window._page==='dashboard')&&window.renderDash();window.updateBadges&&window.updateBadges();}
-});
-
 // ── PARTS realtime listener ──
 onValue(ref(db,'parts'),snap=>{
   if(!window.AD)return;
@@ -941,65 +914,21 @@ function save(){
 // Throttled full-sync: batches rapid saves (e.g. bulk salary) into one write per 800ms
 let _fbSaveTimer=null;
 function forceCloudSync(){
+  if(!window.FB){window._toastMsg('No cloud connection','error');return;}
   const b=document.getElementById('syncBadge');
   if(b){b.innerHTML='<span class="sync-dot" style="background:var(--warn);animation:pulse 1s infinite;"></span>Syncing…';b.className='sync-badge online';}
-  window._fbInitialSyncDone=false;
-  // Re-run the full startup fetch
-  const collections=['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','generators','_meta'];
-  const fb=window.FB;
-  if(!fb){window._toastMsg('No cloud connection','error');return;}
-  Promise.all(collections.map(col=>fb.get(fb.ref(fb.db,col)).then(s=>({col,data:s.val()})).catch(()=>({col,data:null}))))
-  .then(results=>{
-    results.forEach(({col,data})=>{
-      if(!data)return;
-      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims','generators'];
-      if(arrCols.includes(col)){
-        if(!AD[col])AD[col]=[];
-        Object.values(data).forEach(item=>{
-          if(!item||!item.id)return;
-          const i=AD[col].findIndex(x=>String(x.id)===String(item.id));
-          if(i===-1)AD[col].push(item);
-          else AD[col][i]=item;
-        });
-      } else if(col==='bookings'){
-        AD.bookings=_mergeFirebaseCollection(data,AD.bookings,'BK');
-        const maxBK=AD.bookings.reduce((mx,b)=>{const n=parseInt((b.id||'').replace('BK-',''))||0;return n>mx?n:mx;},0);
-        if(maxBK>=AD.nextBK)AD.nextBK=maxBK+1;
-      } else if(col==='invoices'){
-        AD.invoices=_mergeFirebaseCollection(data,AD.invoices,'INV');
-        const maxINV=AD.invoices.reduce((mx,i)=>{const n=parseInt((i.id||'').replace('INV-',''))||0;return n>mx?n:mx;},0);
-        if(maxINV>=AD.nextINV)AD.nextINV=maxINV+1;
-      } else if(col==='users'){
-        Object.values(data).forEach(fu=>{
-          if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id))return;
-          const i=AD.users.findIndex(u=>u.id===fu.id);
-          if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}
-          else AD.users[i]={...AD.users[i],...fu};
-        });
-      } else if(col==='attendance'){
-        if(!AD.attendance)AD.attendance=[];
-        Object.values(data).forEach(fa=>{
-          if(!fa||!fa.id)return;
-          const i=AD.attendance.findIndex(a=>a.id===fa.id);
-          if(i===-1)AD.attendance.push(fa);
-          else AD.attendance[i]=fa;
-        });
-      } else if(col==='_meta'){
-        if((data.nextBK||0)>=(AD.nextBK||1))AD.nextBK=data.nextBK;
-        if((data.nextINV||0)>=(AD.nextINV||1))AD.nextINV=data.nextINV;
-      }
+  window._runFirebaseSync()
+    .then(()=>{
+      if(window._page) window._refreshPage&&window._refreshPage(window._page);
+      if(window._page==='dashboard') renderDash&&renderDash();
+      updateBadges&&updateBadges();
+      if(b){b.innerHTML='<span class="sync-dot online"></span>Live';b.className='sync-badge online';}
+      window._toastMsg('✅ All data synced from cloud!','success');
+    })
+    .catch(()=>{
+      window._toastMsg('Sync failed — check internet connection','error');
+      if(b){b.innerHTML='<span class="sync-dot offline"></span>Offline';b.className='sync-badge offline';}
     });
-    localStorage.setItem('asp_data',JSON.stringify(AD));
-    if(window._page)window._refreshPage&&window._refreshPage(window._page);
-    if(window._page==='dashboard')renderDash&&renderDash();
-    updateBadges&&updateBadges();
-    if(b){b.innerHTML='<span class="sync-dot online"></span>Live';b.className='sync-badge online';}
-    window._toastMsg('✅ All data synced from cloud!','success');
-  })
-  .catch(()=>{
-    window._toastMsg('Sync failed — check internet connection','error');
-    if(b){b.innerHTML='<span class="sync-dot offline"></span>Offline';b.className='sync-badge offline';}
-  });
 }
 
 function _fbSaveAll(){
@@ -1012,7 +941,7 @@ function _fbSaveAll(){
     try{
       const fb=window.FB;
       // Collections that are arrays of objects keyed by .id
-      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims','generators'];
+      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims'];
       arrCols.forEach(col=>{
         const arr=AD[col];
         if(!arr||!arr.length)return;
@@ -1094,136 +1023,133 @@ function load(){
 
   // ── Firebase full-fetch on startup (fixes cross-device blank data) ──
   window._fbInitialSyncDone = false;
-  window._fbInitialSyncPromise = (async ()=>{
-    if(!window.firebaseReady||!window.FB) return;
-    try{
-      const collections = ['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','generators','_meta'];
-      const fetches = collections.map(col=>
-        window.FB.get(window.FB.ref(window.FB.db, col))
-          .then(snap=>({col, data:snap.val()}))
-          .catch(()=>({col, data:null}))
-      );
-      const results = await Promise.all(fetches);
-      results.forEach(({col, data})=>{
-        if(!data) return;
-        if(col==='users'){
-          Object.values(data).forEach(fu=>{
-            if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id)) return;
-            const i=AD.users.findIndex(u=>u.id===fu.id);
-            if(i===-1){ if(fu.status!=='fired') AD.users.push(fu); }
-            else{ AD.users[i]={...AD.users[i],...fu}; }
-          });
-          // Re-apply access rules after user sync
-          AD.users.forEach(u=>{
-            if(!u.access||!u.access.length){
-              u.access=[...(DES_ACCESS[u.designation]||ROLE_ACCESS[u.role]||['dashboard','attendance'])];
-            }
-          });
-        } else if(col==='bookings'){
-          AD.bookings = _mergeFirebaseCollection(data, AD.bookings, 'BK');
-          // Sync nextBK counter
-          const maxBK = AD.bookings.reduce((mx,b)=>{
-            const n=parseInt((b.id||'').replace('BK-',''))||0; return n>mx?n:mx;
-          },0);
-          if(maxBK>=AD.nextBK) AD.nextBK=maxBK+1;
-        } else if(col==='invoices'){
-          AD.invoices = _mergeFirebaseCollection(data, AD.invoices, 'INV');
-          const maxINV = AD.invoices.reduce((mx,i)=>{
-            const n=parseInt((i.id||'').replace('INV-',''))||0; return n>mx?n:mx;
-          },0);
-          if(maxINV>=AD.nextINV) AD.nextINV=maxINV+1;
-        } else if(col==='attendance'){
-          if(!AD.attendance) AD.attendance=[];
-          Object.values(data).forEach(fa=>{
-            if(!fa||!fa.id) return;
-            const i=AD.attendance.findIndex(a=>a.id===fa.id);
-            if(i===-1) AD.attendance.push(fa);
-            else AD.attendance[i]=fa;
-          });
-        } else if(col==='expenses'){
-          if(!AD.expenses) AD.expenses=[];
-          Object.values(data).forEach(fe=>{
-            if(!fe||!fe.id) return;
-            const i=AD.expenses.findIndex(e=>e.id===fe.id);
-            if(i===-1) AD.expenses.push(fe);
-            else AD.expenses[i]=fe;
-          });
-        } else if(col==='investments'){
-          if(!AD.investments) AD.investments=[];
-          Object.values(data).forEach(fi=>{
-            if(!fi||!fi.id) return;
-            const i=AD.investments.findIndex(inv=>inv.id===fi.id);
-            if(i===-1) AD.investments.push(fi);
-            else AD.investments[i]=fi;
-          });
-        } else if(col==='expenseClaims'){
-          if(!AD.expenseClaims) AD.expenseClaims=[];
-          Object.values(data).forEach(fc=>{
-            if(!fc||!fc.id) return;
-            const i=AD.expenseClaims.findIndex(c=>c.id===fc.id);
-            if(i===-1) AD.expenseClaims.push(fc);
-            else AD.expenseClaims[i]=fc;
-          });
-        } else if(col==='salaryPayments'){
-          if(!AD.salaryPayments) AD.salaryPayments=[];
-          Object.values(data).forEach(fp=>{
-            if(!fp||!fp.id) return;
-            const i=AD.salaryPayments.findIndex(p=>String(p.id)===String(fp.id));
-            if(i===-1) AD.salaryPayments.push(fp);
-            else AD.salaryPayments[i]=fp;
-          });
-        } else if(col==='drones'){
-          if(!AD.drones) AD.drones=[];
-          Object.values(data).forEach(fd=>{
-            if(!fd||!fd.id) return;
-            const i=AD.drones.findIndex(d=>d.id===fd.id);
-            if(i===-1) AD.drones.push(fd);
-            else AD.drones[i]=fd;
-          });
-        } else if(col==='generators'){
-          if(!AD.generators) AD.generators=[];
-          Object.values(data).forEach(fg=>{
-            if(!fg||!fg.id) return;
-            const i=AD.generators.findIndex(g=>g.id===fg.id);
-            if(i===-1) AD.generators.push(fg);
-            else AD.generators[i]=fg;
-          });
-        } else if(col==='parts'){
-          if(!AD.parts) AD.parts=[];
-          Object.values(data).forEach(fp=>{
-            if(!fp||!fp.id) return;
-            const i=AD.parts.findIndex(p=>String(p.id)===String(fp.id));
-            if(i===-1) AD.parts.push(fp);
-            else AD.parts[i]=fp;
-          });
-        } else if(col==='partsLog'){
-          if(!AD.partsLog) AD.partsLog=[];
-          Object.values(data).forEach(fl=>{
-            if(!fl||!fl.id) return;
-            const i=AD.partsLog.findIndex(l=>String(l.id)===String(fl.id));
-            if(i===-1) AD.partsLog.push(fl);
-            else AD.partsLog[i]=fl;
-          });
-        } else if(col==='_meta'){
-          if((data.nextBK||0)>=(AD.nextBK||1)) AD.nextBK=data.nextBK;
-          if((data.nextINV||0)>=(AD.nextINV||1)) AD.nextINV=data.nextINV;
-          if(data.deletedBKIds){const s=new Set([...(AD.deletedBKIds||[]),...data.deletedBKIds]);AD.deletedBKIds=[...s];}
-          if(data.deletedINVIds){const s=new Set([...(AD.deletedINVIds||[]),...data.deletedINVIds]);AD.deletedINVIds=[...s];}
-          if(data.deletedDefaults){const s=new Set([...(AD.deletedDefaults||[]),...data.deletedDefaults]);AD.deletedDefaults=[...s];}
-          if(data.deletedUserIds){const s=new Set([...(AD.deletedUserIds||[]),...data.deletedUserIds]);AD.deletedUserIds=[...s];}
-          if(data.expCats&&data.expCats.length) AD.expCats=data.expCats;
-        }
-      });
-      save();
-    } catch(err){ /* silently degrade — localStorage data still shown */ }
-    window._fbInitialSyncDone = true;
-    // Refresh current page if already logged in (handles browser-refresh case)
-    if(window.CU && window._page){
-      window._refreshPage && window._refreshPage(window._page);
-      window.renderDash && window.renderDash && (window._page==='dashboard') && renderDash();
-      window.updateBadges && updateBadges();
-    }
-  })();
+  window._runFirebaseSync = async function(){
+  /* Called on every login so data is always fetched with a valid auth token.
+     The old _fbInitialSyncPromise ran at page-load (before auth) and always
+     got permission_denied, leaving the dashboard on stale localStorage data.
+     Extracting the logic here and calling it inside loginSuccess() fixes the
+     root cause: fresh fetch, authenticated user, every single login. */
+  if(!window.firebaseReady||!window.FB) return;
+  try{
+    const collections = ['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','generators','_meta'];
+    const fetches = collections.map(col=>
+      window.FB.get(window.FB.ref(window.FB.db, col))
+        .then(snap=>({col, data:snap.val()}))
+        .catch(()=>({col, data:null}))
+    );
+    const results = await Promise.all(fetches);
+    results.forEach(({col, data})=>{
+      if(!data) return;
+      if(col==='users'){
+        Object.values(data).forEach(fu=>{
+          if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id)) return;
+          const i=AD.users.findIndex(u=>u.id===fu.id);
+          if(i===-1){ if(fu.status!=='fired') AD.users.push(fu); }
+          else{ AD.users[i]={...AD.users[i],...fu}; }
+        });
+        AD.users.forEach(u=>{
+          if(!u.access||!u.access.length){
+            u.access=[...(DES_ACCESS[u.designation]||ROLE_ACCESS[u.role]||['dashboard','attendance'])];
+          }
+        });
+      } else if(col==='bookings'){
+        AD.bookings = _mergeFirebaseCollection(data, AD.bookings, 'BK');
+        const maxBK = AD.bookings.reduce((mx,b)=>{
+          const n=parseInt((b.id||'').replace('BK-',''))||0; return n>mx?n:mx;
+        },0);
+        if(maxBK>=AD.nextBK) AD.nextBK=maxBK+1;
+      } else if(col==='invoices'){
+        AD.invoices = _mergeFirebaseCollection(data, AD.invoices, 'INV');
+        const maxINV = AD.invoices.reduce((mx,inv)=>{
+          const n=parseInt((inv.id||'').replace('INV-',''))||0; return n>mx?n:mx;
+        },0);
+        if(maxINV>=AD.nextINV) AD.nextINV=maxINV+1;
+      } else if(col==='attendance'){
+        if(!AD.attendance) AD.attendance=[];
+        Object.values(data).forEach(fa=>{
+          if(!fa||!fa.id) return;
+          const i=AD.attendance.findIndex(a=>a.id===fa.id);
+          if(i===-1) AD.attendance.push(fa); else AD.attendance[i]=fa;
+        });
+      } else if(col==='expenses'){
+        if(!AD.expenses) AD.expenses=[];
+        Object.values(data).forEach(fe=>{
+          if(!fe||!fe.id) return;
+          const i=AD.expenses.findIndex(e=>e.id===fe.id);
+          if(i===-1) AD.expenses.push(fe); else AD.expenses[i]=fe;
+        });
+      } else if(col==='investments'){
+        if(!AD.investments) AD.investments=[];
+        Object.values(data).forEach(fi=>{
+          if(!fi||!fi.id) return;
+          const i=AD.investments.findIndex(inv=>inv.id===fi.id);
+          if(i===-1) AD.investments.push(fi); else AD.investments[i]=fi;
+        });
+      } else if(col==='expenseClaims'){
+        if(!AD.expenseClaims) AD.expenseClaims=[];
+        Object.values(data).forEach(fc=>{
+          if(!fc||!fc.id) return;
+          const i=AD.expenseClaims.findIndex(c=>c.id===fc.id);
+          if(i===-1) AD.expenseClaims.push(fc); else AD.expenseClaims[i]=fc;
+        });
+      } else if(col==='salaryPayments'){
+        if(!AD.salaryPayments) AD.salaryPayments=[];
+        Object.values(data).forEach(fp=>{
+          if(!fp||!fp.id) return;
+          const i=AD.salaryPayments.findIndex(p=>String(p.id)===String(fp.id));
+          if(i===-1) AD.salaryPayments.push(fp); else AD.salaryPayments[i]=fp;
+        });
+      } else if(col==='drones'){
+        if(!AD.drones) AD.drones=[];
+        Object.values(data).forEach(fd=>{
+          if(!fd||!fd.id) return;
+          const i=AD.drones.findIndex(d=>d.id===fd.id);
+          if(i===-1) AD.drones.push(fd); else AD.drones[i]=fd;
+        });
+      } else if(col==='generators'){
+        if(!AD.generators) AD.generators=[];
+        Object.values(data).forEach(fg=>{
+          if(!fg||!fg.id) return;
+          const i=AD.generators.findIndex(g=>g.id===fg.id);
+          if(i===-1) AD.generators.push(fg); else AD.generators[i]=fg;
+        });
+      } else if(col==='parts'){
+        if(!AD.parts) AD.parts=[];
+        Object.values(data).forEach(fp=>{
+          if(!fp||!fp.id) return;
+          const i=AD.parts.findIndex(p=>String(p.id)===String(fp.id));
+          if(i===-1) AD.parts.push(fp); else AD.parts[i]=fp;
+        });
+      } else if(col==='partsLog'){
+        if(!AD.partsLog) AD.partsLog=[];
+        Object.values(data).forEach(fl=>{
+          if(!fl||!fl.id) return;
+          const i=AD.partsLog.findIndex(l=>String(l.id)===String(fl.id));
+          if(i===-1) AD.partsLog.push(fl); else AD.partsLog[i]=fl;
+        });
+      } else if(col==='_meta'){
+        if((data.nextBK||0)>=(AD.nextBK||1)) AD.nextBK=data.nextBK;
+        if((data.nextINV||0)>=(AD.nextINV||1)) AD.nextINV=data.nextINV;
+        if(data.deletedBKIds){const s=new Set([...(AD.deletedBKIds||[]),...data.deletedBKIds]);AD.deletedBKIds=[...s];}
+        if(data.deletedINVIds){const s=new Set([...(AD.deletedINVIds||[]),...data.deletedINVIds]);AD.deletedINVIds=[...s];}
+        if(data.deletedDefaults){const s=new Set([...(AD.deletedDefaults||[]),...data.deletedDefaults]);AD.deletedDefaults=[...s];}
+        if(data.deletedUserIds){const s=new Set([...(AD.deletedUserIds||[]),...data.deletedUserIds]);AD.deletedUserIds=[...s];}
+        if(data.expCats&&data.expCats.length) AD.expCats=data.expCats;
+      }
+    });
+    save();
+  } catch(err){ /* silently degrade — localStorage data still shown */ }
+  window._fbInitialSyncDone = true;
+  if(window.CU && window._page){
+    window._refreshPage && window._refreshPage(window._page);
+    (window._page==='dashboard') && window.renderDash && renderDash();
+    window.updateBadges && updateBadges();
+  }
+};
+
+/* Thin wrapper — kept for any legacy callers that read _fbInitialSyncPromise */
+window._fbInitialSyncDone  = false;
+window._fbInitialSyncPromise = window._runFirebaseSync();;
 
   // Register realtime delta listeners after initial fetch
   window._fbInitialSyncPromise.then(()=>{
@@ -1265,42 +1191,7 @@ function clearNotifs(){AD.notifications=[];save();updateNotifBadge();closeModal(
 async function initWeather(){if(navigator.geolocation){navigator.geolocation.getCurrentPosition(async pos=>{await fetchWeather(pos.coords.latitude,pos.coords.longitude);},async()=>{await fetchWeatherByIP();},{timeout:8000});}else{await fetchWeatherByIP();}}
 async function fetchWeatherByIP(){try{const r=await fetch('https://ipapi.co/json/');const d=await r.json();if(d.latitude&&d.longitude)await fetchWeather(d.latitude,d.longitude);else await fetchWeather(24.8607,67.0011);}catch(e){await fetchWeather(24.8607,67.0011);}}
 async function fetchWeather(lat,lon){try{const[wRes,gRes]=await Promise.all([fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weathercode&wind_speed_unit=kmh`),fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)]);const w=await wRes.json();const g=await gRes.json();const c=w.current;const temp=Math.round(c.temperature_2m);const wind=Math.round(c.wind_speed_10m);const rain=c.precipitation||0;const hum=c.relative_humidity_2m||0;const wc=c.weathercode||0;const city=g.address?.city||g.address?.town||g.address?.village||'Pakistan';const icons={0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',51:'🌦️',61:'🌧️',80:'🌦️',95:'⛈️'};const icon=icons[wc]||(rain>0?'🌧️':wind>20?'💨':temp>38?'🔥':'☀️');let advice='Ideal',ac='spray-good';if(wind>20||rain>5){advice='No Spray';ac='spray-bad';}else if(wind>15||hum>85){advice='Caution';ac='spray-warn';}document.getElementById('wIcon').innerText=icon;document.getElementById('wTemp').innerText=temp+'°C';document.getElementById('wLoc').innerText=city;document.getElementById('wAdvice').innerText=advice;document.getElementById('wAdvice').className=`spray-tag ${ac}`;const ww=document.getElementById('wWind');if(ww)ww.innerText=`💨 ${wind}`;const wh=document.getElementById('wHum');if(wh)wh.innerText=`💧 ${hum}%`;}catch(e){document.getElementById('wTemp').innerText='--°C';}}
-function doLogin(){
-const e=document.getElementById('lEmail').value.trim().toLowerCase();const p=document.getElementById('lPwd').value;const btn=document.getElementById('lBtn');if(!e||!p){showErr('Please enter your email and password.');return;}btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';const finish=()=>{btn.disabled=false;btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';};
-// Legacy/offline path: match against whatever is already cached locally on this device.
-const attempt=async()=>{const u=AD.users.find(u=>u.email.toLowerCase()===e);if(!u){finish();showErr('Invalid email or password.');return;}if(u.status==='fired'){finish();showErr('Your employment has been terminated.');return;}if(u.status==='inactive'||!u.active){finish();showErr('Account deactivated. Contact your manager.');return;}if((AD.deletedUserIds||[]).includes(u.id)){finish();showErr('This account no longer exists.');return;}if(u.firebaseUid){try{await window.FB.signIn(u.email,p);}catch(err){finish();if(err&&err.code==='auth/network-request-failed')showErr('No internet connection. Please reconnect and try again.');else showErr('Invalid email or password.');return;}finish();loginSuccess(u);return;}if(u.password!==p){finish();showErr('Invalid email or password.');return;}finish();loginSuccess(u);};
-// v11 FIX: try Firebase Auth directly FIRST, before any local lookup. The old
-// flow always did a bulk get(/users) before signing in (to find the local
-// record by email), which (a) required /users to stay readable pre-auth —
-// a security hole closed in firebase_rules — and (b) could never find a
-// staff account created on another device, since a brand-new phone has no
-// cached copy of it to fall back on. Now: sign in straight away; on success,
-// fetch ONLY this user's own record (allowed under the tightened rules even
-// for pilot/agri accounts), so a phone that has never opened the app before
-// can still log a newly-added employee in immediately.
-const attemptDirectAuth=async()=>{
-  if(!window.firebaseReady||!window.FB||window.isOnline===false)return false;
-  let cred;
-  try{cred=await window.FB.signIn(e,p);}catch(err){return false;}
-  try{
-    const uid=cred.user.uid;
-    const idSnap=await window.FB.get(window.FB.ref(window.FB.db,`uidToUserId/${uid}`));
-    const appId=idSnap.val();
-    const uSnap=appId?await window.FB.get(window.FB.ref(window.FB.db,`users/${appId}`)):null;
-    const fu=uSnap?uSnap.val():null;
-    if(!fu){finish();showErr('Account not fully set up — contact your manager.');window.FB.signOutMain().catch(()=>{});return true;}
-    if(fu.status==='fired'){finish();showErr('Your employment has been terminated.');window.FB.signOutMain().catch(()=>{});return true;}
-    if(fu.status==='inactive'||!fu.active){finish();showErr('Account deactivated. Contact your manager.');window.FB.signOutMain().catch(()=>{});return true;}
-    if((AD.deletedUserIds||[]).includes(fu.id)){finish();showErr('This account no longer exists.');window.FB.signOutMain().catch(()=>{});return true;}
-    const i=AD.users.findIndex(x=>x.id===fu.id);if(i===-1)AD.users.push(fu);else AD.users[i]=fu;
-    save();finish();loginSuccess(fu);return true;
-  }catch(err){window.FB.signOutMain().catch(()=>{});return false;}
-};
-attemptDirectAuth().then(handled=>{
-  if(handled)return;
-  if(window.firebaseReady&&window.FB){window.FB.get(window.FB.ref(window.FB.db,'users')).then(snap=>{const data=snap.val();if(data)Object.values(data).forEach(fu=>{if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id))return;const i=AD.users.findIndex(u=>u.id===fu.id);if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}else AD.users[i]=fu;});save();attempt();}).catch(attempt);}else{attempt();}
-});
-}
+function doLogin(){const e=document.getElementById('lEmail').value.trim().toLowerCase();const p=document.getElementById('lPwd').value;const btn=document.getElementById('lBtn');if(!e||!p){showErr('Please enter your email and password.');return;}btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';const finish=()=>{btn.disabled=false;btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';};const attempt=async()=>{const u=AD.users.find(u=>u.email.toLowerCase()===e);if(!u){finish();showErr('Invalid email or password.');return;}if(u.status==='fired'){finish();showErr('Your employment has been terminated.');return;}if(u.status==='inactive'||!u.active){finish();showErr('Account deactivated. Contact your manager.');return;}if((AD.deletedUserIds||[]).includes(u.id)){finish();showErr('This account no longer exists.');return;}if(u.firebaseUid){try{await window.FB.signIn(u.email,p);}catch(err){finish();if(err&&err.code==='auth/network-request-failed')showErr('No internet connection. Please reconnect and try again.');else showErr('Invalid email or password.');return;}finish();loginSuccess(u);return;}if(u.password!==p){finish();showErr('Invalid email or password.');return;}finish();loginSuccess(u);};if(window.firebaseReady&&window.FB){window.FB.get(window.FB.ref(window.FB.db,'users')).then(snap=>{const data=snap.val();if(data)Object.values(data).forEach(fu=>{if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id))return;const i=AD.users.findIndex(u=>u.id===fu.id);if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}else AD.users[i]=fu;});save();attempt();}).catch(attempt);}else{attempt();}}
 function showErr(msg){const e=document.getElementById('lErr');e.style.display='block';e.innerHTML=`<i class="fas fa-exclamation-triangle"></i> ${msg}`;setTimeout(()=>e.style.display='none',5000);}
 function loginSuccess(u){
   CU=u;window.CU=u;
@@ -1317,12 +1208,17 @@ function loginSuccess(u){
   /* v10 FIX: await initial Firebase sync before rendering dashboard so
      bookings/invoices created on other devices are visible immediately */
   const render=()=>{showPage('dashboard');window._toastMsg(`Welcome back, ${u.name.split(' ')[0]}! 👋`,'success');updateBadges();};
-  if(window._fbInitialSyncDone){
-    render();
-  } else if(window._fbInitialSyncPromise){
-    const area=document.getElementById('content');
-    if(area) area.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;gap:14px;"><div style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.08);border-top:3px solid var(--accent);border-radius:50%;animation:spin .7s linear infinite;"></div><div style="font-size:13px;color:var(--t3);font-family:var(--ff-mono);">Syncing data across devices...</div></div>';
-    window._fbInitialSyncPromise.then(render).catch(render);
+  /* ROOT-CAUSE FIX (v16): _fbInitialSyncPromise ran at page-load BEFORE the user
+     authenticated, so every Firebase read returned permission_denied and the promise
+     resolved with no data. loginSuccess then found _fbInitialSyncDone===true and
+     rendered stale localStorage straight away — that is why edits made on another
+     device never appeared on mobile after a fresh login.
+     Fix: always call _runFirebaseSync() HERE, after auth is confirmed, so the fetch
+     goes out with a valid token and returns real cloud data every single time. */
+  const area=document.getElementById('content');
+  if(area) area.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;gap:16px;"><div style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.08);border-top:3px solid var(--accent);border-radius:50%;animation:spin .7s linear infinite;"></div><div style="font-size:13px;color:var(--t3);font-family:var(--ff-mono);">Fetching latest data from cloud...</div><div style="font-size:11px;color:var(--t4);font-family:var(--ff-mono);">Your changes from other devices will appear now</div></div>';
+  if(window.firebaseReady && window.FB){
+    window._runFirebaseSync().then(render).catch(render);
   } else {
     render();
   }
