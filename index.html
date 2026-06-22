@@ -13,9 +13,54 @@
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getDatabase,ref,set,onValue,update,get,serverTimestamp,push,remove,runTransaction,off,onDisconnect}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import{getAuth,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendPasswordResetEmail,updatePassword}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 const cfg={apiKey:"AIzaSyDCXPRlN5CVmfZgpO7_NE2hRCqCr0h5mqY",authDomain:"agrispray-pro.firebaseapp.com",databaseURL:"https://agrispray-pro-default-rtdb.firebaseio.com",projectId:"agrispray-pro",storageBucket:"agrispray-pro.firebasestorage.app",messagingSenderId:"72689059265",appId:"1:72689059265:web:48bd60e10f5f11d199db40"};
-const app=initializeApp(cfg);const db=getDatabase(app);let _fbListenersRegistered=false;
-window.FB={db,ref,set,onValue,update,get,serverTimestamp,push,remove,runTransaction,off};
+const app=initializeApp(cfg);const db=getDatabase(app);const auth=getAuth(app);let _fbListenersRegistered=false;
+// Secondary, isolated Firebase app instance — used ONLY when a manager creates/migrates
+// a staff Firebase Auth account, so doing so never signs the manager out of their own session.
+const helperApp=initializeApp(cfg,'staffProvisioning');const helperAuth=getAuth(helperApp);
+window.FB={db,ref,set,onValue,update,get,serverTimestamp,push,remove,runTransaction,off,
+  signIn:(email,password)=>signInWithEmailAndPassword(auth,email,password),
+  signOutMain:()=>signOut(auth),
+  sendReset:(email)=>sendPasswordResetEmail(auth,email),
+  // Verifies the old password by re-signing-in, then sets the new one — the standard
+  // Firebase pattern, since updatePassword alone requires a "recent" login.
+  changeOwnPassword: async(email,oldPwd,newPwd)=>{
+    await signInWithEmailAndPassword(auth,email,oldPwd);
+    await updatePassword(auth.currentUser,newPwd);
+  },
+  // Creates a brand-new Firebase Auth account for a staff member using an isolated
+  // secondary app instance, so the currently signed-in manager is never logged out.
+  createStaffAuth: async (email,password)=>{
+    const cred=await createUserWithEmailAndPassword(helperAuth,email,password);
+    const uid=cred.user.uid;
+    await signOut(helperAuth);
+    return uid;
+  },
+  // Writes the lookup tables the security rules check (userRoles / uidToUserId /
+  // userAccess). Per the rules, this only succeeds while the acting signed-in user
+  // is already a manager — that's the chain of trust for granting access to others.
+  grantUserSecurity: async (uid,appUserId,role,accessArr)=>{
+    const accessMap={};(accessArr||[]).forEach(a=>{accessMap[a]=true;});
+    const updates={};
+    updates[`userRoles/${uid}`]=role;
+    updates[`uidToUserId/${uid}`]=appUserId;
+    updates[`userAccess/${uid}`]=accessMap;
+    return update(ref(db),updates);
+  },
+  // Immediately revokes a former staff member's data access (used when firing/deleting
+  // an employee). Their Firebase Auth login itself still technically exists — client code
+  // can't delete another user's auth account without a backend — but with no userAccess
+  // entry, every rule below denies them, so revoking here is what actually matters.
+  revokeUserSecurity: async (uid)=>{
+    if(!uid)return;
+    const updates={};
+    updates[`userRoles/${uid}`]=null;
+    updates[`uidToUserId/${uid}`]=null;
+    updates[`userAccess/${uid}`]=null;
+    return update(ref(db),updates);
+  }
+};
 window.firebaseReady=true;
 onValue(ref(db,'.info/connected'),snap=>{window.isOnline=snap.val()===true;const b=document.getElementById('syncBadge');if(!b)return;if(window.isOnline){b.innerHTML='<span class="sync-dot online"></span>Live';b.className='sync-badge online';(window._q||[]).forEach(f=>{try{f();}catch(e){}});window._q=[];window._updatePresence&&window._updatePresence();}else{b.innerHTML='<span class="sync-dot offline"></span>Offline — data will sync when reconnected';b.className='sync-badge offline';}});
 window._updatePresence=function(){if(!window.CU||!window.firebaseReady||!window.FB)return;const u=window.CU;if(u.status==='fired'||u.status==='inactive'||!u.active)return;const presRef=window.FB.ref(window.FB.db,`presence/${u.id}`);window.FB.update(presRef,{id:u.id,name:u.name,role:u.role,designation:u.designation||u.role,online:true,lastSeen:Date.now(),status:'active'}).catch(()=>{});onDisconnect(presRef).update({online:false,lastSeen:Date.now()}).catch(()=>{});};
@@ -80,6 +125,33 @@ onValue(ref(db,'drones'),snap=>{
     else if(JSON.stringify(window.AD.drones[i])!==JSON.stringify(fd)){window.AD.drones[i]=fd;changed=true;}
   });
   if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('drones');}
+});
+
+// ── GENERATORS realtime listener ──
+onValue(ref(db,'generators'),snap=>{
+  if(!window.AD)return;
+  const data=snap.val();if(!data)return;
+  let changed=false;
+  Object.values(data).forEach(fg=>{
+    if(!fg||!fg.id)return;
+    if(!window.AD.generators)window.AD.generators=[];
+    const i=window.AD.generators.findIndex(g=>g.id===fg.id);
+    if(i===-1){window.AD.generators.push(fg);changed=true;}
+    else if(JSON.stringify(window.AD.generators[i])!==JSON.stringify(fg)){window.AD.generators[i]=fg;changed=true;}
+  });
+  if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('generators');}
+});
+
+// ── _DELETED tombstone listener — removes hard-deleted records from all open devices ──
+onValue(ref(db,'_deleted/bookings'),snap=>{
+  if(!window.AD)return;
+  const tombstones=snap.val();if(!tombstones)return;
+  let changed=false;
+  Object.keys(tombstones).forEach(id=>{
+    const i=window.AD.bookings?window.AD.bookings.findIndex(b=>b.id===id):-1;
+    if(i!==-1){window.AD.bookings.splice(i,1);if(!window.AD.deletedBKIds)window.AD.deletedBKIds=[];if(!window.AD.deletedBKIds.includes(id))window.AD.deletedBKIds.push(id);changed=true;}
+  });
+  if(changed){localStorage.setItem('asp_data',JSON.stringify(window.AD));window._refreshPage&&window._refreshPage('bookings');window.renderDash&&(window._page==='dashboard')&&window.renderDash();window.updateBadges&&window.updateBadges();}
 });
 
 // ── PARTS realtime listener ──
@@ -873,14 +945,14 @@ function forceCloudSync(){
   if(b){b.innerHTML='<span class="sync-dot" style="background:var(--warn);animation:pulse 1s infinite;"></span>Syncing…';b.className='sync-badge online';}
   window._fbInitialSyncDone=false;
   // Re-run the full startup fetch
-  const collections=['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','_meta'];
+  const collections=['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','generators','_meta'];
   const fb=window.FB;
   if(!fb){window._toastMsg('No cloud connection','error');return;}
   Promise.all(collections.map(col=>fb.get(fb.ref(fb.db,col)).then(s=>({col,data:s.val()})).catch(()=>({col,data:null}))))
   .then(results=>{
     results.forEach(({col,data})=>{
       if(!data)return;
-      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims'];
+      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims','generators'];
       if(arrCols.includes(col)){
         if(!AD[col])AD[col]=[];
         Object.values(data).forEach(item=>{
@@ -940,7 +1012,7 @@ function _fbSaveAll(){
     try{
       const fb=window.FB;
       // Collections that are arrays of objects keyed by .id
-      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims'];
+      const arrCols=['expenses','investments','salaryPayments','drones','parts','partsLog','expenseClaims','generators'];
       arrCols.forEach(col=>{
         const arr=AD[col];
         if(!arr||!arr.length)return;
@@ -1025,7 +1097,7 @@ function load(){
   window._fbInitialSyncPromise = (async ()=>{
     if(!window.firebaseReady||!window.FB) return;
     try{
-      const collections = ['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','_meta'];
+      const collections = ['bookings','invoices','users','attendance','expenses','investments','expenseClaims','salaryPayments','drones','parts','partsLog','generators','_meta'];
       const fetches = collections.map(col=>
         window.FB.get(window.FB.ref(window.FB.db, col))
           .then(snap=>({col, data:snap.val()}))
@@ -1108,6 +1180,14 @@ function load(){
             if(i===-1) AD.drones.push(fd);
             else AD.drones[i]=fd;
           });
+        } else if(col==='generators'){
+          if(!AD.generators) AD.generators=[];
+          Object.values(data).forEach(fg=>{
+            if(!fg||!fg.id) return;
+            const i=AD.generators.findIndex(g=>g.id===fg.id);
+            if(i===-1) AD.generators.push(fg);
+            else AD.generators[i]=fg;
+          });
         } else if(col==='parts'){
           if(!AD.parts) AD.parts=[];
           Object.values(data).forEach(fp=>{
@@ -1185,7 +1265,42 @@ function clearNotifs(){AD.notifications=[];save();updateNotifBadge();closeModal(
 async function initWeather(){if(navigator.geolocation){navigator.geolocation.getCurrentPosition(async pos=>{await fetchWeather(pos.coords.latitude,pos.coords.longitude);},async()=>{await fetchWeatherByIP();},{timeout:8000});}else{await fetchWeatherByIP();}}
 async function fetchWeatherByIP(){try{const r=await fetch('https://ipapi.co/json/');const d=await r.json();if(d.latitude&&d.longitude)await fetchWeather(d.latitude,d.longitude);else await fetchWeather(24.8607,67.0011);}catch(e){await fetchWeather(24.8607,67.0011);}}
 async function fetchWeather(lat,lon){try{const[wRes,gRes]=await Promise.all([fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weathercode&wind_speed_unit=kmh`),fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)]);const w=await wRes.json();const g=await gRes.json();const c=w.current;const temp=Math.round(c.temperature_2m);const wind=Math.round(c.wind_speed_10m);const rain=c.precipitation||0;const hum=c.relative_humidity_2m||0;const wc=c.weathercode||0;const city=g.address?.city||g.address?.town||g.address?.village||'Pakistan';const icons={0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',51:'🌦️',61:'🌧️',80:'🌦️',95:'⛈️'};const icon=icons[wc]||(rain>0?'🌧️':wind>20?'💨':temp>38?'🔥':'☀️');let advice='Ideal',ac='spray-good';if(wind>20||rain>5){advice='No Spray';ac='spray-bad';}else if(wind>15||hum>85){advice='Caution';ac='spray-warn';}document.getElementById('wIcon').innerText=icon;document.getElementById('wTemp').innerText=temp+'°C';document.getElementById('wLoc').innerText=city;document.getElementById('wAdvice').innerText=advice;document.getElementById('wAdvice').className=`spray-tag ${ac}`;const ww=document.getElementById('wWind');if(ww)ww.innerText=`💨 ${wind}`;const wh=document.getElementById('wHum');if(wh)wh.innerText=`💧 ${hum}%`;}catch(e){document.getElementById('wTemp').innerText='--°C';}}
-function doLogin(){const e=document.getElementById('lEmail').value.trim().toLowerCase();const p=document.getElementById('lPwd').value;const btn=document.getElementById('lBtn');if(!e||!p){showErr('Please enter your email and password.');return;}btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';const attempt=()=>{const u=AD.users.find(u=>u.email.toLowerCase()===e&&u.password===p);btn.disabled=false;btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';if(!u){showErr('Invalid email or password.');return;}if(u.status==='fired'){showErr('Your employment has been terminated.');return;}if(u.status==='inactive'||!u.active){showErr('Account deactivated. Contact your manager.');return;}if((AD.deletedUserIds||[]).includes(u.id)){showErr('This account no longer exists.');return;}loginSuccess(u);};if(window.firebaseReady&&window.FB){window.FB.get(window.FB.ref(window.FB.db,'users')).then(snap=>{const data=snap.val();if(data)Object.values(data).forEach(fu=>{if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id))return;const i=AD.users.findIndex(u=>u.id===fu.id);if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}else AD.users[i]=fu;});save();attempt();}).catch(attempt);}else{attempt();}}
+function doLogin(){
+const e=document.getElementById('lEmail').value.trim().toLowerCase();const p=document.getElementById('lPwd').value;const btn=document.getElementById('lBtn');if(!e||!p){showErr('Please enter your email and password.');return;}btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';const finish=()=>{btn.disabled=false;btn.innerHTML='<i class="fas fa-arrow-right-to-bracket"></i> Access Dashboard';};
+// Legacy/offline path: match against whatever is already cached locally on this device.
+const attempt=async()=>{const u=AD.users.find(u=>u.email.toLowerCase()===e);if(!u){finish();showErr('Invalid email or password.');return;}if(u.status==='fired'){finish();showErr('Your employment has been terminated.');return;}if(u.status==='inactive'||!u.active){finish();showErr('Account deactivated. Contact your manager.');return;}if((AD.deletedUserIds||[]).includes(u.id)){finish();showErr('This account no longer exists.');return;}if(u.firebaseUid){try{await window.FB.signIn(u.email,p);}catch(err){finish();if(err&&err.code==='auth/network-request-failed')showErr('No internet connection. Please reconnect and try again.');else showErr('Invalid email or password.');return;}finish();loginSuccess(u);return;}if(u.password!==p){finish();showErr('Invalid email or password.');return;}finish();loginSuccess(u);};
+// v11 FIX: try Firebase Auth directly FIRST, before any local lookup. The old
+// flow always did a bulk get(/users) before signing in (to find the local
+// record by email), which (a) required /users to stay readable pre-auth —
+// a security hole closed in firebase_rules — and (b) could never find a
+// staff account created on another device, since a brand-new phone has no
+// cached copy of it to fall back on. Now: sign in straight away; on success,
+// fetch ONLY this user's own record (allowed under the tightened rules even
+// for pilot/agri accounts), so a phone that has never opened the app before
+// can still log a newly-added employee in immediately.
+const attemptDirectAuth=async()=>{
+  if(!window.firebaseReady||!window.FB||window.isOnline===false)return false;
+  let cred;
+  try{cred=await window.FB.signIn(e,p);}catch(err){return false;}
+  try{
+    const uid=cred.user.uid;
+    const idSnap=await window.FB.get(window.FB.ref(window.FB.db,`uidToUserId/${uid}`));
+    const appId=idSnap.val();
+    const uSnap=appId?await window.FB.get(window.FB.ref(window.FB.db,`users/${appId}`)):null;
+    const fu=uSnap?uSnap.val():null;
+    if(!fu){finish();showErr('Account not fully set up — contact your manager.');window.FB.signOutMain().catch(()=>{});return true;}
+    if(fu.status==='fired'){finish();showErr('Your employment has been terminated.');window.FB.signOutMain().catch(()=>{});return true;}
+    if(fu.status==='inactive'||!fu.active){finish();showErr('Account deactivated. Contact your manager.');window.FB.signOutMain().catch(()=>{});return true;}
+    if((AD.deletedUserIds||[]).includes(fu.id)){finish();showErr('This account no longer exists.');window.FB.signOutMain().catch(()=>{});return true;}
+    const i=AD.users.findIndex(x=>x.id===fu.id);if(i===-1)AD.users.push(fu);else AD.users[i]=fu;
+    save();finish();loginSuccess(fu);return true;
+  }catch(err){window.FB.signOutMain().catch(()=>{});return false;}
+};
+attemptDirectAuth().then(handled=>{
+  if(handled)return;
+  if(window.firebaseReady&&window.FB){window.FB.get(window.FB.ref(window.FB.db,'users')).then(snap=>{const data=snap.val();if(data)Object.values(data).forEach(fu=>{if(!fu||!fu.id||(AD.deletedUserIds||[]).includes(fu.id))return;const i=AD.users.findIndex(u=>u.id===fu.id);if(i===-1){if(fu.status!=='fired')AD.users.push(fu);}else AD.users[i]=fu;});save();attempt();}).catch(attempt);}else{attempt();}
+});
+}
 function showErr(msg){const e=document.getElementById('lErr');e.style.display='block';e.innerHTML=`<i class="fas fa-exclamation-triangle"></i> ${msg}`;setTimeout(()=>e.style.display='none',5000);}
 function loginSuccess(u){
   CU=u;window.CU=u;
@@ -2089,7 +2204,12 @@ function renderEmployees(){
   const cm=today().slice(0,7);
   const paidThisMonth=AD.salaryPayments.filter(p=>p.date?.startsWith(cm)).reduce((s,p)=>s+p.amount,0);
   const pendingPilots=AD.users.filter(u=>u.status==='active'&&u.salary>0);
+  const _unmigrated=AD.users.filter(u=>u.status!=='fired'&&!u.firebaseUid);
   document.getElementById('content').innerHTML=`
+    ${_unmigrated.length&&window.firebaseReady?`<div class="card" style="padding:16px 20px;margin-bottom:20px;border:1px solid rgba(232,160,32,0.35);background:rgba(232,160,32,0.06);display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+      <div><strong style="color:var(--gold);"><i class="fas fa-shield-halved"></i> ${_unmigrated.length} staff account${_unmigrated.length>1?'s':''} not yet on secure login</strong><div style="font-size:12.5px;color:var(--t3);margin-top:3px;">Run this once to move them from local passwords to real Firebase logins.</div></div>
+      <button class="btn" style="background:var(--gold);color:#1a1400;" onclick="migrateStaffToFirebaseAuth()"><i class="fas fa-shield-halved"></i> Migrate Now</button>
+    </div>`:''}
     <div class="g4" style="margin-bottom:20px;">
       <div class="kpi"><div class="kpi-val">${AD.users.length}</div><div class="kpi-lbl">Total Staff</div></div>
       <div class="kpi" style="--kpi-color:var(--grn)"><div class="kpi-val" style="color:var(--grn);">${active}</div><div class="kpi-lbl">Active</div></div>
@@ -2222,7 +2342,7 @@ function filterEmp(){
     </tr>`;
   }).join('');
 }
-function addEmployee(){
+async function addEmployee(){
   const name=document.getElementById('eName').value.trim();
   const email=document.getElementById('eEmail').value.trim().toLowerCase();
   const pwd=document.getElementById('ePwd').value.trim();
@@ -2233,19 +2353,54 @@ function addEmployee(){
   const dailyWage=salType==='daily'?parseFloat(document.getElementById('eDaily').value)||0:0;
   if(!name){window._toastMsg('Name required','error');return;}
   if(!email||!email.includes('@')){window._toastMsg('Valid email required','error');return;}
-  if(!pwd||pwd.length<4){window._toastMsg('Password min 4 chars','error');return;}
+  if(!pwd||pwd.length<6){window._toastMsg('Password min 6 characters (Firebase requirement)','error');return;}
   if(AD.users.find(u=>u.email.toLowerCase()===email)){window._toastMsg('Email already registered','error');return;}
   let access=[];
   document.querySelectorAll('#accessChecks input[type=checkbox]:checked').forEach(cb=>{if(!access.includes(cb.value))access.push(cb.value);});
   if(!access.length)access=[...(DES_ACCESS[designation]||ROLE_ACCESS[role]||['dashboard','attendance'])];
   if(!access.includes('dashboard')&&!access.includes('all'))access.unshift('dashboard');
   const canApproveExpense=document.getElementById('eCanApproveExp')?.checked||false;
-  const newUser={id:'u_'+Date.now(),email,password:pwd,role,designation,name,active:true,joinDate:document.getElementById('eJoin').value||today(),salary,salaryType:salType,dailyWage,phone:document.getElementById('ePhone').value.trim(),cnic:document.getElementById('eCnic').value.trim(),status:'active',access,canApproveExpense};
+  const newUser={id:'u_'+Date.now(),email,role,designation,name,active:true,joinDate:document.getElementById('eJoin').value||today(),salary,salaryType:salType,dailyWage,phone:document.getElementById('ePhone').value.trim(),cnic:document.getElementById('eCnic').value.trim(),status:'active',access,canApproveExpense};
+  if(window.firebaseReady&&window.FB){
+    try{
+      const uid=await window.FB.createStaffAuth(email,pwd);
+      newUser.firebaseUid=uid;
+      await window.FB.grantUserSecurity(uid,newUser.id,role,access);
+    }catch(err){
+      const msg=(err&&err.code==='auth/email-already-in-use')?'That email already has a login — use a different email.':'Could not create a secure login (check your connection). Employee was NOT added — please retry.';
+      window._toastMsg(msg,'error');
+      return;
+    }
+  }
   AD.users.push(newUser);save();
   if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${newUser.id}`),newUser).catch(()=>{});
   window._toastMsg(`${name} added`,'success');
   renderEmployees();
   ['eName','eEmail','ePwd','eSal','eDaily','ePhone','eCnic'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+}
+async function migrateStaffToFirebaseAuth(){
+  if(!CU||CU.role!=='manager'){window._toastMsg('Manager access required','error');return;}
+  if(!window.firebaseReady||!window.FB){window._toastMsg('Not connected to Firebase — try again when online','error');return;}
+  const targets=AD.users.filter(u=>u.status!=='fired'&&!u.firebaseUid);
+  if(!targets.length){window._toastMsg('Everyone is already on secure logins','success');return;}
+  if(!confirm(`Migrate ${targets.length} account(s) to secure Firebase logins now?`))return;
+  let okCount=0;const skipped=[];
+  for(const u of targets){
+    if(!u.password||u.password.length<6){skipped.push(`${u.name} — password too short, ask them to set one 6+ characters first`);continue;}
+    try{
+      const uid=await window.FB.createStaffAuth(u.email,u.password);
+      await window.FB.grantUserSecurity(uid,u.id,u.role,u.access);
+      u.firebaseUid=uid;delete u.password;
+      await window.FB.update(window.FB.ref(window.FB.db,`users/${u.id}`),{firebaseUid:uid,password:null});
+      okCount++;
+    }catch(err){
+      if(err&&err.code==='auth/email-already-in-use')skipped.push(`${u.name} — email already has a Firebase login (possible duplicate account)`);
+      else skipped.push(`${u.name} — ${(err&&err.message)||'unknown error'}`);
+    }
+  }
+  save();renderEmployees();
+  window._toastMsg(`Migrated ${okCount} of ${targets.length} account(s).`,skipped.length?'error':'success');
+  if(skipped.length)alert('Some accounts were skipped:\n\n'+skipped.join('\n'));
 }
 function toggleSalType(){
   const t=document.getElementById('eSalType')?.value;
@@ -2268,10 +2423,11 @@ function editSalaryRate(uid){
     u.salaryType='monthly';u.salary=m;u.dailyWage=0;save();filterEmp();window._toastMsg(`${u.name} → Monthly ${fc(m)}`,'success');
   }
 }
-function setEmpStatus(uid,st){const u=AD.users.find(u=>u.id===uid);if(u){u.status=st;u.active=st==='active';save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:st,active:st==='active'}).catch(()=>{});renderEmployees();window._toastMsg(`${u.name} → ${st}`,'success');}}
-function delEmp(uid){if(!confirm('Delete permanently?'))return;const isDefault=DEF_USERS.some(du=>du.id===uid);if(isDefault){if(!AD.deletedDefaults)AD.deletedDefaults=[];if(!AD.deletedDefaults.includes(uid))AD.deletedDefaults.push(uid);}if(!AD.deletedUserIds)AD.deletedUserIds=[];if(!AD.deletedUserIds.includes(uid))AD.deletedUserIds.push(uid);AD.users=AD.users.filter(u=>u.id!==uid);save();if(window.firebaseReady&&window.FB){window.FB.remove(window.FB.ref(window.FB.db,`users/${uid}`)).catch(()=>{});window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});}renderEmployees();window._toastMsg('Employee deleted');}
-function fireEmployee(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;if(uid==='u1'){window._toastMsg('Cannot fire primary manager','error');return;}if(!confirm(`FIRE ${u.name.toUpperCase()}?\nThis immediately revokes all access.`))return;u.status='fired';u.active=false;u.firedDate=today();u.firedBy=CU.name;save();if(window.firebaseReady&&window.FB){window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:'fired',active:false,firedDate:today(),firedBy:CU.name}).catch(()=>{});window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});}addNotif(`${u.name} has been terminated by ${CU.name}`,'error','manager');window._toastMsg(`${u.name} fired`,'error');renderEmployees();}
-function showCreds(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;document.getElementById('pwdBox').innerHTML=`<div style="background:rgba(0,0,0,0.35);border-radius:12px;padding:16px;margin-bottom:14px;"><div style="font-size:18px;font-weight:800;font-family:var(--ff-head);">${u.name}</div><div style="margin-top:4px;"><span class="badge b-${u.role}">${u.designation||u.role}</span></div></div>${[['Login Email',u.email,'cE'],['Login Password',u.password,'cP'],['Login URL',window.location.href,'cU']].map(([lbl,val,id])=>`<div style="margin-bottom:10px;"><label>${lbl}</label><div style="display:flex;gap:8px;"><input type="text" value="${val}" readonly id="${id}" style="flex:1;font-size:11px;font-family:var(--ff-mono);"><button class="btn btn-outline btn-xs" onclick="cpField('${id}')"><i class="fas fa-copy"></i></button></div></div>`).join('')}<div style="display:flex;gap:10px;margin-top:12px;"><button class="btn btn-secondary btn-sm" onclick="cpAll('${u.id}')"><i class="fas fa-share-alt"></i> Copy All</button><button class="btn btn-outline btn-sm" onclick="closeModal('mPwd')">Close</button></div>`;openModal('mPwd');}
+function setEmpStatus(uid,st){const u=AD.users.find(u=>u.id===uid);if(u){u.status=st;u.active=st==='active';save();if(window.firebaseReady&&window.FB){window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:st,active:st==='active'}).catch(()=>{});if(u.firebaseUid){if(st==='active')window.FB.grantUserSecurity(u.firebaseUid,u.id,u.role,u.access).catch(()=>{});else window.FB.revokeUserSecurity(u.firebaseUid).catch(()=>{});}}renderEmployees();window._toastMsg(`${u.name} → ${st}`,'success');}}
+function delEmp(uid){if(!confirm('Delete permanently?'))return;const _delU=AD.users.find(u=>u.id===uid);const isDefault=DEF_USERS.some(du=>du.id===uid);if(isDefault){if(!AD.deletedDefaults)AD.deletedDefaults=[];if(!AD.deletedDefaults.includes(uid))AD.deletedDefaults.push(uid);}if(!AD.deletedUserIds)AD.deletedUserIds=[];if(!AD.deletedUserIds.includes(uid))AD.deletedUserIds.push(uid);AD.users=AD.users.filter(u=>u.id!==uid);save();if(window.firebaseReady&&window.FB){window.FB.remove(window.FB.ref(window.FB.db,`users/${uid}`)).catch(()=>{});window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});if(_delU&&_delU.firebaseUid)window.FB.revokeUserSecurity(_delU.firebaseUid).catch(()=>{});}renderEmployees();window._toastMsg('Employee deleted');}
+function fireEmployee(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;if(uid==='u1'){window._toastMsg('Cannot fire primary manager','error');return;}if(!confirm(`FIRE ${u.name.toUpperCase()}?\nThis immediately revokes all access.`))return;u.status='fired';u.active=false;u.firedDate=today();u.firedBy=CU.name;save();if(window.firebaseReady&&window.FB){window.FB.update(window.FB.ref(window.FB.db,`users/${uid}`),{status:'fired',active:false,firedDate:today(),firedBy:CU.name}).catch(()=>{});window.FB.remove(window.FB.ref(window.FB.db,`presence/${uid}`)).catch(()=>{});if(u.firebaseUid)window.FB.revokeUserSecurity(u.firebaseUid).catch(()=>{});}addNotif(`${u.name} has been terminated by ${CU.name}`,'error','manager');window._toastMsg(`${u.name} fired`,'error');renderEmployees();}
+function showCreds(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;const credRow=u.firebaseUid?`<div style="margin-bottom:10px;"><label>Login Password</label><div style="font-size:12.5px;color:var(--t3);padding:8px 0;">🔒 Secured by Firebase — passwords can't be viewed. <button class="btn btn-outline btn-xs" onclick="sendResetEmail('${u.id}')">Send Reset Email</button> to let them set a new one.</div></div>`:`<div style="margin-bottom:10px;"><label>Login Password</label><div style="display:flex;gap:8px;"><input type="text" value="${u.password||''}" readonly id="cP" style="flex:1;font-size:11px;font-family:var(--ff-mono);"><button class="btn btn-outline btn-xs" onclick="cpField('cP')"><i class="fas fa-copy"></i></button></div></div>`;document.getElementById('pwdBox').innerHTML=`<div style="background:rgba(0,0,0,0.35);border-radius:12px;padding:16px;margin-bottom:14px;"><div style="font-size:18px;font-weight:800;font-family:var(--ff-head);">${u.name}</div><div style="margin-top:4px;"><span class="badge b-${u.role}">${u.designation||u.role}</span></div></div><div style="margin-bottom:10px;"><label>Login Email</label><div style="display:flex;gap:8px;"><input type="text" value="${u.email}" readonly id="cE" style="flex:1;font-size:11px;font-family:var(--ff-mono);"><button class="btn btn-outline btn-xs" onclick="cpField('cE')"><i class="fas fa-copy"></i></button></div></div>${credRow}<div style="margin-bottom:10px;"><label>Login URL</label><div style="display:flex;gap:8px;"><input type="text" value="${window.location.href}" readonly id="cU" style="flex:1;font-size:11px;font-family:var(--ff-mono);"><button class="btn btn-outline btn-xs" onclick="cpField('cU')"><i class="fas fa-copy"></i></button></div></div><div style="display:flex;gap:10px;margin-top:12px;">${u.firebaseUid?'':`<button class="btn btn-secondary btn-sm" onclick="cpAll('${u.id}')"><i class="fas fa-share-alt"></i> Copy All</button>`}<button class="btn btn-outline btn-sm" onclick="closeModal('mPwd')">Close</button></div>`;openModal('mPwd');}
+async function sendResetEmail(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;if(!window.firebaseReady||!window.FB){window._toastMsg('Not connected — try again when online','error');return;}try{await window.FB.sendReset(u.email);window._toastMsg(`Reset link sent to ${u.email}`,'success');}catch(err){window._toastMsg('Could not send reset email','error');}}
 function cpField(id){const el=document.getElementById(id);if(!el)return;navigator.clipboard?.writeText(el.value).then(()=>window._toastMsg('Copied!','success')).catch(()=>{el.select();document.execCommand('copy');window._toastMsg('Copied!','success');});}
 function cpAll(uid){const u=AD.users.find(u=>u.id===uid);if(!u)return;const t=`AGRIVYNX — Login\nName: ${u.name}\nRole: ${u.designation||u.role}\nEmail: ${u.email}\nPassword: ${u.password}\nURL: ${window.location.href}`;navigator.clipboard?.writeText(t).then(()=>window._toastMsg('Credentials copied!','success')).catch(()=>window._toastMsg('Copy failed','error'));}
 
@@ -2284,7 +2440,7 @@ function renderSettings(){
     ${CU.role==='manager'?`<div class="card"><div class="card-title">💾 Data Management</div><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;"><button class="btn btn-outline btn-sm" onclick="exportData()"><i class="fas fa-download"></i> Export JSON Backup</button><label class="btn btn-outline btn-sm" style="cursor:pointer;"><i class="fas fa-upload"></i> Import Backup <input type="file" accept=".json" style="display:none;" onchange="importData(event)"></label><button class="btn btn-danger btn-sm" onclick="clearAllData()"><i class="fas fa-trash"></i> Clear All Data</button></div></div>`:''}`;
 }
 function saveSettings(){AD.company=document.getElementById('sComp').value;AD.waNum=document.getElementById('sWa').value;save();window._toastMsg('Settings saved!','success');}
-function changePwd(){const o=document.getElementById('oCp').value,n=document.getElementById('nCp').value,c=document.getElementById('cfCp').value;if(o!==CU.password){window._toastMsg('Current password incorrect','error');return;}if(n!==c){window._toastMsg('Passwords do not match','error');return;}if(n.length<4){window._toastMsg('Too short','error');return;}CU.password=n;const i=AD.users.findIndex(u=>u.id===CU.id);if(i!==-1)AD.users[i].password=n;save();window._toastMsg('Password changed!','success');}
+async function changePwd(){const o=document.getElementById('oCp').value,n=document.getElementById('nCp').value,c=document.getElementById('cfCp').value;if(n!==c){window._toastMsg('Passwords do not match','error');return;}if(n.length<6){window._toastMsg('Password must be at least 6 characters','error');return;}if(CU.firebaseUid){if(!window.firebaseReady||!window.FB){window._toastMsg('Not connected — try again when online','error');return;}try{await window.FB.changeOwnPassword(CU.email,o,n);}catch(err){window._toastMsg('Current password incorrect','error');return;}window._toastMsg('Password changed!','success');return;}if(o!==CU.password){window._toastMsg('Current password incorrect','error');return;}CU.password=n;const i=AD.users.findIndex(u=>u.id===CU.id);if(i!==-1)AD.users[i].password=n;save();if(window.firebaseReady&&window.FB)window.FB.update(window.FB.ref(window.FB.db,`users/${CU.id}`),{password:n}).catch(()=>{});window._toastMsg('Password changed!','success');}
 function exportData(){const a=document.createElement('a');a.href='data:application/json,'+encodeURIComponent(JSON.stringify(AD,null,2));a.download='agrivynx_backup_'+today()+'.json';a.click();}
 function clearAllData(){if(!confirm('Delete ALL data? Cannot be undone.'))return;localStorage.clear();location.reload();}
 function importData(evt){const file=evt.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{try{const parsed=JSON.parse(e.target.result);if(!parsed.bookings&&!parsed.users){window._toastMsg('Invalid file','error');return;}if(!confirm(`Import? ${(parsed.bookings||[]).length} bookings, ${(parsed.invoices||[]).length} invoices.`))return;['bookings','invoices','expenses','investments','drones','generators','parts','partsLog'].forEach(key=>{if(!parsed[key])return;if(!AD[key])AD[key]=[];parsed[key].forEach(item=>{if(item.id&&!AD[key].find(x=>x.id===item.id))AD[key].push(item);});});if(parsed.users)parsed.users.forEach(pu=>{if(!AD.users.find(u=>u.id===pu.id))AD.users.push(pu);});if(parsed.nextBK>AD.nextBK)AD.nextBK=parsed.nextBK;if(parsed.nextINV>AD.nextINV)AD.nextINV=parsed.nextINV;save();window._toastMsg('Import complete!','success');renderSettings();}catch(err){window._toastMsg('Failed to read file','error');}};reader.readAsText(file);}
